@@ -1,0 +1,164 @@
+// NexOPS data model.
+// Wire DTOs are documented in ARCHITECTURE.md; this schema is the source of truth
+// for persistence. All mutation paths must emit an AuditEvent.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Os {
+  UBUNTU
+  DEBIAN
+}
+
+enum TargetStatus {
+  PENDING_ENROLMENT
+  ONLINE
+  OFFLINE
+  DEGRADED
+  ENROLMENT_FAILED
+  MAINTENANCE
+  REMOVED
+}
+
+enum JobType {
+  APT_UPDATE
+  APT_UPGRADE
+  CHECK_UPDATES
+  SERVICE_STATUS
+}
+
+enum JobStatus {
+  QUEUED
+  DISPATCHED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  TIMED_OUT
+}
+
+enum ActorType {
+  USER
+  AGENT
+  SYSTEM
+}
+
+model Target {
+  id               String       @id @default(cuid())
+  name             String
+  hostnameOverride String?
+  os               Os
+  osVersion        String?
+  arch             String?
+  labels           String[]
+  status           TargetStatus @default(PENDING_ENROLMENT)
+  lastHeartbeatAt  DateTime?
+  lastTelemetryAt  DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  deletedAt        DateTime?
+
+  agent     AgentIdentity?
+  jobs      Job[]
+  telemetry TelemetrySnapshot[]
+  tokens    EnrolmentToken[]
+  audit     AuditEvent[]
+
+  @@index([status])
+  @@index([lastHeartbeatAt])
+  @@index([name])
+}
+
+model AgentIdentity {
+  id                 String    @id @default(cuid())
+  targetId           String    @unique
+  publicKey          String
+  credentialHash     String?
+  credentialIssuedAt DateTime?
+  agentVersion       String?
+  enrolledAt         DateTime?
+  revokedAt          DateTime?
+
+  target Target @relation(fields: [targetId], references: [id], onDelete: Cascade)
+}
+
+model EnrolmentToken {
+  id        String    @id @default(cuid())
+  targetId  String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  target Target @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+}
+
+model TelemetrySnapshot {
+  id                 String   @id @default(cuid())
+  targetId           String
+  capturedAt         DateTime
+  cpuPct             Float?
+  load1              Float?
+  load5              Float?
+  load15             Float?
+  memTotalBytes      BigInt
+  memUsedBytes       BigInt
+  memAvailableBytes  BigInt
+  swapUsedBytes      BigInt?
+  diskUsedBytes      BigInt?
+  diskTotalBytes     BigInt?
+  netRxRateBps       Float?
+  netTxRateBps       Float?
+  uptimeSec          BigInt?
+  raw                Json
+
+  target Target @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@index([targetId, capturedAt])
+}
+
+model Job {
+  id           String    @id @default(cuid())
+  targetId     String
+  type         JobType
+  params       Json?
+  status       JobStatus @default(QUEUED)
+  requestedBy  String
+  createdAt    DateTime  @default(now())
+  dispatchedAt DateTime?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  exitCode     Int?
+  stdoutTail   String?
+  stderrTail   String?
+  error        String?
+  timeoutSec   Int       @default(600)
+
+  target Target @relation(fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@index([targetId, createdAt])
+  @@index([status])
+}
+
+model AuditEvent {
+  id         String    @id @default(cuid())
+  actorId    String
+  actorType  ActorType
+  action     String
+  targetType String?
+  targetId   String?
+  metadata   Json?
+  createdAt  DateTime  @default(now())
+
+  target Target? @relation(fields: [targetId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+}
