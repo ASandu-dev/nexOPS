@@ -68,6 +68,8 @@ export interface AgentIdentityDto {
 export interface TargetDto {
   id: string;
   name: string;
+  /** Live hostname reported by the agent at enrolment/heartbeat (null until first report). */
+  hostname?: string | null;
   hostnameOverride: string | null;
   os: OsFamily;
   osVersion: string | null;
@@ -80,6 +82,31 @@ export interface TargetDto {
   updatedAt: IsoDateTime;
   deletedAt: IsoDateTime | null;
   agent: AgentIdentityDto | null;
+  /** Jobs waiting to be picked up on the next heartbeat (QUEUED). Populated by list/detail endpoints. */
+  pendingJobCount?: number;
+  /** Jobs currently executing on the target (RUNNING). Populated by list/detail endpoints. */
+  runningJobCount?: number;
+}
+
+export type TargetWarningCode =
+  | "OFFLINE"
+  | "TELEMETRY_STALE"
+  | "NO_TELEMETRY"
+  | "LOW_DISK"
+  | "ENROLMENT_FAILED"
+  | "CREDENTIAL_REVOKED";
+
+export interface TargetWarningDto {
+  code: TargetWarningCode;
+  message: string;
+  /** Extra context (mount point, percentage, …) depending on `code`. */
+  detail?: Record<string, number | string>;
+}
+
+/** Detail payload of `GET /api/targets/[id]`. */
+export interface TargetDetailDto extends TargetDto {
+  warnings: TargetWarningDto[];
+  recentJobs: JobDto[];
 }
 
 /** Response of `POST /api/targets`; the only place the raw enrolment token is exposed. */
@@ -88,6 +115,8 @@ export interface CreateTargetResponseDto {
   enrolmentToken: string;
   expiresAt: IsoDateTime;
   installCommand: string;
+  /** Absolute URL of the installer script referenced by `installCommand`. */
+  installerUrl?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +193,8 @@ export interface TelemetrySeriesDto {
   range: TelemetryRange;
   intervalSec: number;
   points: TelemetryPointDto[];
+  /** Most recent full snapshot (raw disks/net/services/pkgUpdates); null when the target never reported. */
+  latest: TelemetryDto | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +217,8 @@ export interface JobDto {
   stderrTail: string | null;
   error: string | null;
   timeoutSec: number;
+  /** Target display name; populated by endpoints that join `Target`. */
+  targetName?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -212,6 +245,14 @@ export interface StatusCountDto {
   count: number;
 }
 
+/** Averages computed from each target's latest telemetry snapshot. */
+export interface FleetAggregateDto {
+  sampledTargets: number;
+  avgCpuPct: number | null;
+  avgMemUsedPct: number | null;
+  avgDiskUsedPct: number | null;
+}
+
 export interface OverviewDto {
   totals: {
     targets: number;
@@ -223,11 +264,13 @@ export interface OverviewDto {
     enrolmentFailed: number;
   };
   countsByStatus: StatusCountDto[];
+  /** Worst-freshness DEGRADED and OFFLINE targets, capped at 10. */
   degradedTargets: TargetDto[];
   activeJobs: JobDto[];
   failedJobs: JobDto[];
   recentJobs: JobDto[];
   recentAudit: AuditEventDto[];
+  fleet: FleetAggregateDto;
 }
 
 // ---------------------------------------------------------------------------
@@ -280,7 +323,8 @@ export interface HeartbeatResponse {
 }
 
 export interface JobResultRequest {
-  status: Extract<JobStatus, "SUCCEEDED" | "FAILED">;
+  /** TIMED_OUT is accepted because the agent reports it after killing the process group. */
+  status: Extract<JobStatus, "SUCCEEDED" | "FAILED" | "TIMED_OUT">;
   exitCode: number | null;
   stdoutTail: string | null;
   stderrTail: string | null;

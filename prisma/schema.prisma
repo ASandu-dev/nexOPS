@@ -52,6 +52,7 @@ enum ActorType {
 model Target {
   id               String       @id @default(cuid())
   name             String
+  hostname         String?
   hostnameOverride String?
   os               Os
   osVersion        String?
@@ -79,7 +80,8 @@ model AgentIdentity {
   id                 String    @id @default(cuid())
   targetId           String    @unique
   publicKey          String
-  credentialHash     String?
+  // Unique SHA-256 hash of the bearer credential; the only lookup key agents authenticate with.
+  credentialHash     String?   @unique
   credentialIssuedAt DateTime?
   agentVersion       String?
   enrolledAt         DateTime?
@@ -161,4 +163,13 @@ model AuditEvent {
   target Target? @relation(fields: [targetId], references: [id], onDelete: SetNull)
 
   @@index([createdAt])
+}
+
+// Singleton-row application configuration store (key = "singleton").
+// Holds operator overrides for settings whose defaults come from env vars;
+// see src/lib/server/settings.ts.
+model AppConfig {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
 }
