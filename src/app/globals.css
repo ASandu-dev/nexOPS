@@ -1,0 +1,154 @@
+@import "tailwindcss";
+
+/* Class-based dark mode so the shell can toggle themes without following the OS. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Material Design 3 inspired design tokens.
+ * Values live as raw CSS variables so both themes share one token contract;
+ * `@theme inline` maps them onto Tailwind color utilities (bg-surface, text-on-surface, ...).
+ */
+:root {
+  color-scheme: light;
+
+  --surface: #f7f9fc;
+  --on-surface: #0f172a;
+  --surface-container: #ffffff;
+  --surface-container-high: #eef2f8;
+  --on-surface-variant: #475569;
+
+  --primary: #4f46e5;
+  --on-primary: #ffffff;
+  --primary-container: #e0e7ff;
+  --on-primary-container: #1e1b4b;
+
+  --outline: #cbd5e1;
+  --outline-variant: #e2e8f0;
+
+  --success: #16a34a;
+  --on-success: #ffffff;
+  --success-container: #dcfce7;
+  --on-success-container: #052e16;
+
+  --warning: #d97706;
+  --on-warning: #ffffff;
+  --warning-container: #fef3c7;
+  --on-warning-container: #451a03;
+
+  --error: #dc2626;
+  --on-error: #ffffff;
+  --error-container: #fee2e2;
+  --on-error-container: #450a0a;
+
+  --pending: #2563eb;
+  --on-pending: #ffffff;
+  --pending-container: #dbeafe;
+  --on-pending-container: #0c1a3a;
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.875rem;
+}
+
+.dark {
+  color-scheme: dark;
+
+  --surface: #0b1220;
+  --on-surface: #e2e8f0;
+  --surface-container: #131c2e;
+  --surface-container-high: #1e293b;
+  --on-surface-variant: #94a3b8;
+
+  --primary: #818cf8;
+  --on-primary: #1e1b4b;
+  --primary-container: #312e81;
+  --on-primary-container: #e0e7ff;
+
+  --outline: #334155;
+  --outline-variant: #1e293b;
+
+  --success: #22c55e;
+  --on-success: #052e16;
+  --success-container: #14532d;
+  --on-success-container: #dcfce7;
+
+  --warning: #f59e0b;
+  --on-warning: #451a03;
+  --warning-container: #78350f;
+  --on-warning-container: #fef3c7;
+
+  --error: #f87171;
+  --on-error: #450a0a;
+  --error-container: #7f1d1d;
+  --on-error-container: #fee2e2;
+
+  --pending: #60a5fa;
+  --on-pending: #0c1a3a;
+  --pending-container: #1e3a8a;
+  --on-pending-container: #dbeafe;
+}
+
+@theme inline {
+  --color-surface: var(--surface);
+  --color-on-surface: var(--on-surface);
+  --color-surface-container: var(--surface-container);
+  --color-surface-container-high: var(--surface-container-high);
+  --color-on-surface-variant: var(--on-surface-variant);
+
+  --color-primary: var(--primary);
+  --color-on-primary: var(--on-primary);
+  --color-primary-container: var(--primary-container);
+  --color-on-primary-container: var(--on-primary-container);
+
+  --color-outline: var(--outline);
+  --color-outline-variant: var(--outline-variant);
+
+  --color-success: var(--success);
+  --color-on-success: var(--on-success);
+  --color-success-container: var(--success-container);
+  --color-on-success-container: var(--on-success-container);
+
+  --color-warning: var(--warning);
+  --color-on-warning: var(--on-warning);
+  --color-warning-container: var(--warning-container);
+  --color-on-warning-container: var(--on-warning-container);
+
+  --color-error: var(--error);
+  --color-on-error: var(--on-error);
+  --color-error-container: var(--error-container);
+  --color-on-error-container: var(--on-error-container);
+
+  --color-pending: var(--pending);
+  --color-on-pending: var(--on-pending);
+  --color-pending-container: var(--pending-container);
+  --color-on-pending-container: var(--on-pending-container);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+}
+
+@layer base {
+  * {
+    border-color: var(--outline-variant);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--surface);
+    color: var(--on-surface);
+    font-family:
+      ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
+      Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+}
