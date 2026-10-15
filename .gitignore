@@ -1,0 +1,38 @@
+# dependencies
+node_modules
+.pnpm-store
+
+# next.js
+.next
+out
+next-env.d.ts
+
+# production build output
+dist
+agent-dist
+
+# typescript
+*.tsbuildinfo
+
+# environment
+.env
+.env.local
+.env.*.local
+
+# prisma
+prisma/*.db
+prisma/migrations/dev.db*
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# os / editor
+.DS_Store
+.idea
+.vscode/*
+!.vscode/extensions.json
+
+# docker
+docker-compose.override.yml
