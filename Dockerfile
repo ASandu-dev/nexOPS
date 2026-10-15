@@ -31,7 +31,14 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN pnpm exec prisma generate && pnpm build
+RUN pnpm exec prisma generate && pnpm build \
+ && mkdir -p /out-prisma \
+ && node -e "const p=require('path');const d=p.join(p.dirname(require.resolve('@prisma/client/package.json')),'..','..','.prisma');require('fs').cpSync(d,'/out-prisma',{recursive:true})" \
+ && ls /out-prisma/client
+
+# --- migrate: run database migrations -----------------------------------------
+FROM build AS migrate
+CMD ["pnpm", "exec", "prisma", "db", "push"]
 
 # --- runner: minimal standalone server ---------------------------------------
 FROM node:24-alpine AS runner
@@ -52,7 +59,7 @@ COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 # Prisma client + schema for runtime queries
 COPY --from=build --chown=nextjs:nodejs /app/prisma ./prisma
-COPY --from=build --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=build --chown=nextjs:nodejs /out-prisma ./node_modules/.prisma
 COPY --from=build --chown=nextjs:nodejs /app/node_modules/@prisma ./node_modules/@prisma
 
 # Agent binaries + checksums (served at /api/agent/releases/*)

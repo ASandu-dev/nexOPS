@@ -35,11 +35,15 @@ CLERK_SECRET_KEY=sk_live_...
 NEXT_PUBLIC_APP_URL=https://nexops.example.com
 
 # Database (use external PostgreSQL for production HA, or keep Docker Compose)
-DATABASE_URL=postgresql://nexops:strong-password@postgres:5432/nexops?schema=public
+# Generate a strong password: openssl rand -base64 32
+POSTGRES_PASSWORD=your_strong_random_password_here
+DATABASE_URL=postgresql://nexops:${POSTGRES_PASSWORD}@postgres:5432/nexops?schema=public
 
 # Optional overrides
 TELEMETRY_RETENTION_DAYS=30
 ```
+
+**Note:** PostgreSQL is bound to `127.0.0.1:5432` on the host. Do not expose port 5432 externally. Use a reverse proxy for TLS termination on port 443.
 
 **Critical:** `NEXT_PUBLIC_APP_URL` must be the **exact HTTPS URL** agents will use. Agent install commands are generated from this value.
 
@@ -261,7 +265,7 @@ Disk usage ≈ Total rows × 2 KB
 | **TLS** | Required for all production deployments. Agent bearer credentials transit in `Authorization: Bearer` headers. | `curl -I https://nexops.example.com` shows `Strict-Transport-Security` |
 | **Clerk Keys** | Use production keys (`pk_live_`, `sk_live_`). Never commit to git. | Check `.env` not in repo; `grep -r "sk_live" .` returns nothing |
 | **Database Password** | Strong random password. Not `nexops`. | `openssl rand -base64 32` |
-| **Firewall** | Only expose 80/443 (reverse proxy) and 22 (SSH). Block 5432, 3000 externally. | `nmap -p 3000,5432 <server-ip>` shows filtered/closed |
+| **Firewall** | Only expose 80/443 (reverse proxy) and 22 (SSH). Block 5432, 3000 externally. PostgreSQL binds to 127.0.0.1 only. | `nmap -p 3000,5432 <server-ip>` shows filtered/closed |
 | **Docker** | Control plane runs as non-root `nextjs` user (UID 1001). | `docker compose exec control-plane whoami` → `nextjs` |
 | **Backups** | Automated, tested, off-site. | Restore test quarterly |
 | **Updates** | Regular `docker compose pull` + rebuild for base image security patches. | Monthly schedule |
@@ -286,6 +290,7 @@ Disk usage ≈ Total rows × 2 KB
 - **Migrations run as a one-shot `migrate` service** before `control-plane` starts (`depends_on: service_completed_successfully`).
 - **Healthcheck** hits `/` (root page) — no auth required. Returns 200 if Next.js process is responsive.
 - **`tmpfs: /tmp`** mounted for Next.js runtime needs (read-only root fs otherwise).
+- **PostgreSQL binds to `127.0.0.1:5432`** on the host — not exposed externally. Password via `POSTGRES_PASSWORD` env var.
 
 ---
 
@@ -293,6 +298,7 @@ Disk usage ≈ Total rows × 2 KB
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
+| `POSTGRES_PASSWORD` | Yes | — | Strong random password for PostgreSQL (generate with `openssl rand -base64 32`) |
 | `DATABASE_URL` | Yes | — | PostgreSQL connection string |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Yes | — | Clerk public key |
 | `CLERK_SECRET_KEY` | Yes | — | Clerk secret key (server only) |
