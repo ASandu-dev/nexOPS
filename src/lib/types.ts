@@ -86,6 +86,15 @@ export interface TargetDto {
   pendingJobCount?: number;
   /** Jobs currently executing on the target (RUNNING). Populated by list/detail endpoints. */
   runningJobCount?: number;
+  /**
+   * Latest-snapshot usage percentages. Optional: the list endpoint does not
+   * currently populate these, so the UI renders "—" when they are absent.
+   */
+  cpuPct?: number | null;
+  memUsedPct?: number | null;
+  diskUsedPct?: number | null;
+  /** Latest reported uptime in seconds. Optional for the same reason as above. */
+  uptimeSec?: number | null;
 }
 
 export type TargetWarningCode =
@@ -186,6 +195,13 @@ export interface TelemetryPointDto {
   diskUsedPct: number | null;
   netRxRateBps: number | null;
   netTxRateBps: number | null;
+  /**
+   * Load averages. Optional: the telemetry series endpoint does not currently
+   * aggregate these, so the UI falls back to the latest snapshot's values.
+   */
+  load1?: number | null;
+  load5?: number | null;
+  load15?: number | null;
 }
 
 export interface TelemetrySeriesDto {

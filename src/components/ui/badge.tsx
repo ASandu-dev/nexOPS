@@ -1,6 +1,7 @@
 import type { HTMLAttributes } from "react";
 import { cn } from "@/lib/cn";
-import type { TargetStatus } from "@/lib/types";
+import type { ActorType, JobStatus, TargetStatus } from "@/lib/types";
+import { ACTOR_TYPE_LABEL, JOB_STATUS_LABEL } from "@/lib/display";
 
 export type BadgeVariant =
   | "neutral"
@@ -87,6 +88,48 @@ export function StatusBadge({ status, ...rest }: StatusBadgeProps) {
   return (
     <Badge variant={STATUS_VARIANT[status]} withDot role="status" {...rest}>
       {STATUS_LABEL[status]}
+    </Badge>
+  );
+}
+
+const JOB_STATUS_VARIANT: Record<JobStatus, BadgeVariant> = {
+  QUEUED: "pending",
+  DISPATCHED: "info",
+  RUNNING: "info",
+  SUCCEEDED: "online",
+  FAILED: "error",
+  CANCELLED: "neutral",
+  TIMED_OUT: "degraded",
+};
+
+export interface JobStatusBadgeProps extends Omit<HTMLAttributes<HTMLSpanElement>, "children"> {
+  status: JobStatus;
+}
+
+/** Job-status pill; text label always present, colour is reinforcement only. */
+export function JobStatusBadge({ status, ...rest }: JobStatusBadgeProps) {
+  return (
+    <Badge variant={JOB_STATUS_VARIANT[status]} withDot role="status" {...rest}>
+      {JOB_STATUS_LABEL[status]}
+    </Badge>
+  );
+}
+
+const ACTOR_VARIANT: Record<ActorType, BadgeVariant> = {
+  USER: "info",
+  AGENT: "neutral",
+  SYSTEM: "neutral",
+};
+
+export interface ActorTypeBadgeProps extends Omit<HTMLAttributes<HTMLSpanElement>, "children"> {
+  actorType: ActorType;
+}
+
+/** Audit actor-type pill. */
+export function ActorTypeBadge({ actorType, ...rest }: ActorTypeBadgeProps) {
+  return (
+    <Badge variant={ACTOR_VARIANT[actorType]} {...rest}>
+      {ACTOR_TYPE_LABEL[actorType]}
     </Badge>
   );
 }
