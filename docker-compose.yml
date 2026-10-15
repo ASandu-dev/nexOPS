@@ -17,7 +17,21 @@ services:
       retries: 5
       start_period: 30s
 
-  app:
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["npx", "prisma", "db", "push"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://nexops:nexops@postgres:5432/nexops?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  control-plane:
     build:
       context: .
       dockerfile: Dockerfile
@@ -25,6 +39,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     env_file:
       - .env
     environment:
@@ -32,6 +48,14 @@ services:
       NODE_ENV: production
     ports:
       - "3000:3000"
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
 
 volumes:
   pgdata:
