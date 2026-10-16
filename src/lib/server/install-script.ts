@@ -147,12 +147,19 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-if ! systemctl enable --now nexops-agent; then
-  err "failed to enable nexops-agent; inspect with: systemctl status nexops-agent"
+if ! systemctl enable nexops-agent.service; then
+  err "failed to enable nexops-agent.service; inspect with: systemctl status nexops-agent.service"
+  exit 5
+fi
+# restart (never start): \`systemctl start\` is a no-op on an already-active
+# unit, which would leave the old process running with the old binary/env
+# after an upgrade or control-plane change.
+if ! systemctl restart nexops-agent.service; then
+  err "failed to restart nexops-agent.service; inspect with: journalctl -u nexops-agent.service -n 100"
   exit 5
 fi
 
-log "service nexops-agent enabled and started"
+log "service nexops-agent enabled and (re)started"
 log "follow logs with: journalctl -u nexops-agent -f"
 log "the agent enrols on first start, then scrubs ENROL_TOKEN from /etc/nexops/agent.env"
 exit 0
