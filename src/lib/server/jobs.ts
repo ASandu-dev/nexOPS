@@ -110,7 +110,7 @@ async function pickupGraceSec(): Promise<number> {
 
 export interface CreateJobInput {
   targetId: string;
-  type: "APT_UPDATE" | "APT_UPGRADE" | "CHECK_UPDATES" | "SERVICE_STATUS";
+  type: "APT_UPDATE" | "APT_UPGRADE" | "APT_FIX_BROKEN" | "CHECK_UPDATES" | "SERVICE_STATUS";
   params: Record<string, unknown> | null;
 }
 

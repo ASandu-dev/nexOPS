@@ -112,7 +112,7 @@ func buildSpec(job protocol.Job) (cmdSpec, error) {
 // deterministically; production always passes apt.SpecFor.
 func buildSpecWith(job protocol.Job, aptSpec func(apt.Sub) (apt.Spec, error)) (cmdSpec, error) {
 	switch job.Type {
-	case protocol.JobAPTUpdate, protocol.JobAPTUpgrade, protocol.JobCheckUpdates:
+	case protocol.JobAPTUpdate, protocol.JobAPTUpgrade, protocol.JobAPTFixBroken, protocol.JobCheckUpdates:
 		sub, err := aptSubForJob(job.Type)
 		if err != nil {
 			return cmdSpec{}, err
@@ -155,6 +155,8 @@ func aptSubForJob(jobType string) (apt.Sub, error) {
 		return apt.Update, nil
 	case protocol.JobAPTUpgrade:
 		return apt.Upgrade, nil
+	case protocol.JobAPTFixBroken:
+		return apt.FixBroken, nil
 	case protocol.JobCheckUpdates:
 		return apt.Simulate, nil
 	}

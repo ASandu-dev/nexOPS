@@ -16,14 +16,15 @@ import (
 // whitelisted (NOPASSWD, exact path) in /etc/sudoers.d/nexops-agent.
 const HelperPath = "/usr/local/libexec/nexops-apt"
 
-// Sub is one of the three whitelisted helper subcommands. Job types are
+// Sub is one of the four whitelisted helper subcommands. Job types are
 // hard-mapped to these values; nothing else may reach argv.
 type Sub string
 
 const (
-	Update   Sub = "update"
-	Upgrade  Sub = "upgrade"
-	Simulate Sub = "simulate"
+	Update    Sub = "update"
+	Upgrade   Sub = "upgrade"
+	FixBroken Sub = "fix-broken"
+	Simulate  Sub = "simulate"
 )
 
 // Spec is an argv vector plus extra environment assignments — never a shell
@@ -70,7 +71,7 @@ func Available() bool {
 // branches are unit-testable without the helper existing on the test host.
 // A non-whitelisted sub is rejected before it can reach argv on either path.
 func specFor(sub Sub, helperAvailable bool) (Spec, error) {
-	if sub != Update && sub != Upgrade && sub != Simulate {
+	if sub != Update && sub != Upgrade && sub != FixBroken && sub != Simulate {
 		return Spec{}, fmt.Errorf("apt: %q is not a whitelisted subcommand", sub)
 	}
 	if helperAvailable {
@@ -92,6 +93,10 @@ func specFor(sub Sub, helperAvailable bool) (Spec, error) {
 	case Upgrade:
 		// Non-interactive so apt never blocks on conffile prompts.
 		return Spec{Name: "apt-get", Args: []string{"upgrade", "-y"}, Env: []string{"DEBIAN_FRONTEND=noninteractive"}}, nil
+	case FixBroken:
+		// Recovery path for a half-configured dpkg state; non-interactive for
+		// the same reason as upgrade.
+		return Spec{Name: "apt-get", Args: []string{"-f", "install", "-y"}, Env: []string{"DEBIAN_FRONTEND=noninteractive"}}, nil
 	default: // Simulate
 		return Spec{Name: "apt-get", Args: []string{"-s", "upgrade"}, Env: []string{"LANG=C", "LC_ALL=C"}}, nil
 	}

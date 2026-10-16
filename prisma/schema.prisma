@@ -29,6 +29,7 @@ enum TargetStatus {
 enum JobType {
   APT_UPDATE
   APT_UPGRADE
+  APT_FIX_BROKEN
   CHECK_UPDATES
   SERVICE_STATUS
 }

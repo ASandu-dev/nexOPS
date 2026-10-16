@@ -134,7 +134,7 @@ log "wrote /etc/nexops/agent.env (0640, root:nexops-agent)"
 
 # --- 6. Privileged apt helper (least privilege) -----------------------------
 # apt maintenance needs root, but the agent must not run privileged in general.
-# Only this fixed three-subcommand dispatch is reachable via sudo, and it takes
+# Only this fixed four-subcommand dispatch is reachable via sudo, and it takes
 # no user input beyond the subcommand name itself.
 install -d -m 0755 -o root -g root /usr/local/libexec
 APT_TMP=$(mktemp)
@@ -146,10 +146,11 @@ cat > "$APT_TMP" <<'EOF'
 set -eu
 [ "$#" -eq 1 ] || exit 64
 case "$1" in
-  update)   exec apt-get update -y ;;
-  upgrade)  exec env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y ;;
-  simulate) exec apt-get -s -o Debug::NoLocking=1 upgrade ;;
-  *)        exit 64 ;;
+  update)     exec apt-get update -y ;;
+  upgrade)    exec env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y ;;
+  fix-broken) exec env DEBIAN_FRONTEND=noninteractive apt-get -f install -y ;;
+  simulate)   exec apt-get -s -o Debug::NoLocking=1 upgrade ;;
+  *)          exit 64 ;;
 esac
 EOF
 install -m 0755 -o root -g root "$APT_TMP" /usr/local/libexec/nexops-apt
@@ -191,29 +192,22 @@ ExecStart=/usr/local/bin/nexops-agent
 Restart=always
 RestartSec=5
 TimeoutStopSec=30
-# The agent elevates ONLY via the audited /usr/local/libexec/nexops-apt
-# sudoers helper for apt maintenance. Do not re-add setuid-blocking hardening
-# directives here: they prevent sudo from elevating.
-# ProtectSystem=full keeps /usr and /boot read-only; /etc must stay writable
-# because dpkg/conffiles/updated-alternatives write there during upgrades, and
-# the only privileged path is the audited /usr/local/libexec/nexops-apt
-# sudoers helper. The previous strict setting made /etc read-only and broke
-# upgrades (debconf mkstemp EROFS) and the enrol-token scrub without adding
-# meaningful security over the sudoers boundary.
-ProtectSystem=full
+# Privilege boundary: the agent runs unprivileged as User=nexops-agent (it
+# cannot write /usr, /etc, or any system path) and elevates ONLY via the
+# audited /usr/local/libexec/nexops-apt sudoers helper (whitelisted
+# subcommands, no argument injection). There is deliberately no read-only
+# mount-namespace sandbox here: dpkg/apt must write /usr (binaries, libs,
+# docs), /etc (conffiles, updated-alternatives) and /var/cache/debconf
+# (mkstemp templates) during a real upgrade, so a read-only root would break
+# the agent's core feature without adding security beyond the unprivileged
+# user + audited sudoers helper. Do not re-add setuid-blocking directives
+# either: they prevent sudo from elevating.
 ProtectHome=true
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 LockPersonality=true
-# The mount namespace is inherited by the sudo'd apt helper. apt/dpkg must
-# update their own state (/var/lib/apt, /var/lib/dpkg, /var/cache/apt,
-# /var/log/apt) and dpkg appends /var/log/dpkg.log; debconf needs
-# /var/cache/debconf for its mkstemp templates. /etc/nexops is listed
-# explicitly for the agent's enrol-token scrub (with ProtectSystem=full /etc is
-# already writable; these entries document the required write surface).
-ReadWritePaths=/var/lib/nexops /var/lib/apt /var/lib/dpkg /var/cache/apt /var/cache/debconf /var/log/apt /var/log/dpkg.log /etc/nexops
 
 [Install]
 WantedBy=multi-user.target

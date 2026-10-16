@@ -28,6 +28,7 @@ export type OsFamily = (typeof OS_FAMILIES)[number];
 export const JOB_TYPES = [
   "APT_UPDATE",
   "APT_UPGRADE",
+  "APT_FIX_BROKEN",
   "CHECK_UPDATES",
   "SERVICE_STATUS",
 ] as const;

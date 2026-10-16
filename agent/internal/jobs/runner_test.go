@@ -74,6 +74,7 @@ func TestBuildSpecAptJobTypesRouteToWhitelistedSub(t *testing.T) {
 	}{
 		{protocol.JobAPTUpdate, apt.Update},
 		{protocol.JobAPTUpgrade, apt.Upgrade},
+		{protocol.JobAPTFixBroken, apt.FixBroken},
 		{protocol.JobCheckUpdates, apt.Simulate},
 	}
 	for _, c := range cases {
@@ -116,6 +117,7 @@ func TestAptSubForJob(t *testing.T) {
 	}{
 		{protocol.JobAPTUpdate, apt.Update},
 		{protocol.JobAPTUpgrade, apt.Upgrade},
+		{protocol.JobAPTFixBroken, apt.FixBroken},
 		{protocol.JobCheckUpdates, apt.Simulate},
 	}
 	for _, c := range cases {

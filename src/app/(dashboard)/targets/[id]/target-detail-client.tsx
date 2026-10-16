@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Pencil, Search, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, Pencil, Search, Trash2, Upload, Wrench } from "lucide-react";
 import Link from "next/link";
 import type { JobDto, TargetDetailDto, TelemetryRange, TelemetrySeriesDto } from "@/lib/types";
 import { apiFetch, toApiError, useApi } from "@/lib/use-api";
@@ -34,6 +34,7 @@ export function TargetDetailClient({ id }: { id: string }) {
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
+  const [fixOpen, setFixOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const { data: target, error, loading, refresh } = useApi<TargetDetailDto>(`/api/targets/${id}`);
@@ -68,6 +69,20 @@ export function TargetDetailClient({ id }: { id: string }) {
     try {
       await queueJob("CHECK_UPDATES");
       notify({ message: "Update check queued.", variant: "success" });
+      refresh();
+    } catch (caught) {
+      notify({ message: toApiError(caught).message, variant: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function fixBroken() {
+    setBusy(true);
+    try {
+      await queueJob("APT_FIX_BROKEN");
+      notify({ message: "Fix broken packages queued.", variant: "success" });
+      setFixOpen(false);
       refresh();
     } catch (caught) {
       notify({ message: toApiError(caught).message, variant: "error" });
@@ -111,6 +126,14 @@ export function TargetDetailClient({ id }: { id: string }) {
               leadingIcon={<Search className="size-4" aria-hidden="true" />}
             >
               Check updates
+            </Button>
+            <Button
+              variant="outlined"
+              size="sm"
+              onClick={() => setFixOpen(true)}
+              leadingIcon={<Wrench className="size-4" aria-hidden="true" />}
+            >
+              Fix broken packages
             </Button>
             <Button
               variant="outlined"
@@ -193,6 +216,15 @@ export function TargetDetailClient({ id }: { id: string }) {
         confirmLabel="Queue update"
         loading={busy}
         onConfirm={runUpdate}
+      />
+      <ConfirmDialog
+        open={fixOpen}
+        onOpenChange={setFixOpen}
+        title="Fix broken packages"
+        description="Queues apt-get -f install on this target to repair a half-configured dpkg state. The agent runs it on its next heartbeat."
+        confirmLabel="Queue fix"
+        loading={busy}
+        onConfirm={fixBroken}
       />
     </div>
   );

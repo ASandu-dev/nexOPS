@@ -19,6 +19,7 @@ export const JOB_STATUS_LABEL: Record<JobStatus, string> = {
 export const JOB_TYPE_LABEL: Record<JobType, string> = {
   APT_UPDATE: "APT update",
   APT_UPGRADE: "APT upgrade",
+  APT_FIX_BROKEN: "Fix broken packages",
   CHECK_UPDATES: "Check updates",
   SERVICE_STATUS: "Service status",
 };
@@ -26,6 +27,7 @@ export const JOB_TYPE_LABEL: Record<JobType, string> = {
 export const JOB_TYPE_DESCRIPTION: Record<JobType, string> = {
   APT_UPDATE: "Refresh the APT package index (apt-get update).",
   APT_UPGRADE: "Install available package upgrades (apt-get upgrade).",
+  APT_FIX_BROKEN: "Fix broken dependencies (apt-get -f install).",
   CHECK_UPDATES: "Report how many package updates are available.",
   SERVICE_STATUS: "Report the state of watched systemd services.",
 };

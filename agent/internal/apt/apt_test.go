@@ -18,6 +18,7 @@ func TestSpecForHelperPresent(t *testing.T) {
 	}{
 		{Update, ""},
 		{Upgrade, ""},
+		{FixBroken, ""},
 		{Simulate, "LANG=C LC_ALL=C"},
 	}
 	for _, c := range cases {
@@ -47,6 +48,7 @@ func TestSpecForHelperAbsent(t *testing.T) {
 	}{
 		{Update, "update -y", ""},
 		{Upgrade, "upgrade -y", "DEBIAN_FRONTEND=noninteractive"},
+		{FixBroken, "-f install -y", "DEBIAN_FRONTEND=noninteractive"},
 		{Simulate, "-s upgrade", "LANG=C LC_ALL=C"},
 	}
 	for _, c := range cases {

@@ -64,7 +64,8 @@ Everything is JSON, camelCase, matching `src/lib/types.ts`. See
   `status` ∈ `SUCCEEDED | FAILED | TIMED_OUT`.
 
 Job types: `APT_UPDATE` (`apt-get update -y`), `APT_UPGRADE`
-(`DEBIAN_FRONTEND=noninteractive apt-get upgrade -y`), `CHECK_UPDATES`
+(`DEBIAN_FRONTEND=noninteractive apt-get upgrade -y`), `APT_FIX_BROKEN`
+(`DEBIAN_FRONTEND=noninteractive apt-get -f install -y`), `CHECK_UPDATES`
 (`apt-get -s upgrade`), `SERVICE_STATUS` (`systemctl status <service>
 --no-pager -l`). Jobs run **sequentially**; a poisoned service name is
 rejected before it reaches argv.

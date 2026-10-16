@@ -13,6 +13,7 @@ import (
 const (
 	JobAPTUpdate    = "APT_UPDATE"
 	JobAPTUpgrade   = "APT_UPGRADE"
+	JobAPTFixBroken = "APT_FIX_BROKEN"
 	JobCheckUpdates = "CHECK_UPDATES"
 	JobServiceState = "SERVICE_STATUS"
 )
