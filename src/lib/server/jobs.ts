@@ -4,6 +4,7 @@ import { prisma } from "./prisma";
 import { recordAudit } from "./audit";
 import { toJobDto, toPaginated, emptyPaginated } from "./dto";
 import { conflict, notFound } from "./errors";
+import { getSettings } from "./settings";
 
 const TERMINAL_STATUSES: readonly JobStatus[] = ["SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"];
 
@@ -43,11 +44,25 @@ export async function dispatchQueuedJobs(targetId: string): Promise<Job[]> {
 }
 
 /**
- * Moves RUNNING jobs past their per-job timeout to TIMED_OUT
- * (ARCHITECTURE.md §3: the control plane enforces timeoutSec too).
+ * Fallback heartbeat interval (seconds) when settings cannot be read. The
+ * pickup/start grace is twice this value.
+ */
+const DEFAULT_HEARTBEAT_INTERVAL_SEC = 60;
+
+/**
+ * Reaps jobs that can no longer make progress:
+ *  - RUNNING past `startedAt + timeoutSec` (ARCHITECTURE.md §3);
+ *  - DISPATCHED but never acknowledged by the agent within 2× the heartbeat
+ *    interval (the poll response was lost or the agent died before starting);
+ *  - RUNNING with no `startedAt` within the same grace (malformed start report).
+ *
+ * The grace is derived from the configured heartbeat interval so a slow but
+ * healthy agent is not reaped prematurely.
  */
 export async function reapTimedOutJobs(): Promise<number> {
-  return prisma.$executeRaw`
+  const graceSec = await pickupGraceSec();
+
+  const timedOut = await prisma.$executeRaw`
     UPDATE "Job"
     SET "status" = 'TIMED_OUT',
         "finishedAt" = now(),
@@ -56,6 +71,41 @@ export async function reapTimedOutJobs(): Promise<number> {
       AND "startedAt" IS NOT NULL
       AND "startedAt" + ("timeoutSec"::double precision * interval '1 second') < now()
   `;
+
+  const neverPickedUp = await prisma.$executeRaw`
+    UPDATE "Job"
+    SET "status" = 'TIMED_OUT',
+        "finishedAt" = now(),
+        "error" = 'agent never picked up job'
+    WHERE "status" = 'DISPATCHED'
+      AND "dispatchedAt" IS NOT NULL
+      AND "dispatchedAt" + (${graceSec}::double precision * interval '1 second') < now()
+  `;
+
+  const neverStarted = await prisma.$executeRaw`
+    UPDATE "Job"
+    SET "status" = 'TIMED_OUT',
+        "finishedAt" = now(),
+        "error" = 'agent did not report job start'
+    WHERE "status" = 'RUNNING'
+      AND "startedAt" IS NULL
+      AND "dispatchedAt" IS NOT NULL
+      AND "dispatchedAt" + (${graceSec}::double precision * interval '1 second') < now()
+  `;
+
+  return timedOut + neverPickedUp + neverStarted;
+}
+
+/** Twice the configured heartbeat interval; falls back to a constant if settings are unreadable. */
+async function pickupGraceSec(): Promise<number> {
+  try {
+    const { settings } = await getSettings();
+    return settings.heartbeatIntervalSec * 2;
+  } catch {
+    // Settings are best-effort here: the reaping queries below surface any real
+    // DB failure, so a transient read error must not block cleanup.
+    return DEFAULT_HEARTBEAT_INTERVAL_SEC * 2;
+  }
 }
 
 export interface CreateJobInput {

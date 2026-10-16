@@ -24,6 +24,9 @@ const RANGE_CONFIG: Record<TelemetryRange, { spanSec: number; bucketSec: number 
 interface BucketRow {
   bucket: Date;
   cpuPct: number | null;
+  load1: number | null;
+  load5: number | null;
+  load15: number | null;
   memUsedPct: number | null;
   diskUsedPct: number | null;
   netRxRateBps: number | null;
@@ -108,6 +111,9 @@ export async function getTelemetrySeries(
     SELECT
       date_bin(${interval}, "capturedAt", to_timestamp(0)) AS bucket,
       avg("cpuPct") AS "cpuPct",
+      avg("load1") AS "load1",
+      avg("load5") AS "load5",
+      avg("load15") AS "load15",
       avg(CASE WHEN "memTotalBytes" > 0
           THEN "memUsedBytes"::float8 / "memTotalBytes" * 100 END) AS "memUsedPct",
       avg(CASE WHEN "diskTotalBytes" > 0
@@ -129,6 +135,9 @@ export async function getTelemetrySeries(
   const points: TelemetryPointDto[] = rows.map((row) => ({
     capturedAt: row.bucket.toISOString(),
     cpuPct: row.cpuPct,
+    load1: row.load1,
+    load5: row.load5,
+    load15: row.load15,
     memUsedPct: row.memUsedPct,
     diskUsedPct: row.diskUsedPct,
     netRxRateBps: row.netRxRateBps,
