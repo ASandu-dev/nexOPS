@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -132,7 +133,13 @@ func Load(path string) (Config, error) {
 
 // ScrubEnrolToken rewrites the env file without any ENROL_TOKEN line, keeping
 // every other line (including comments) byte-for-byte. Idempotent.
-func (c *Config) ScrubEnrolToken() error {
+//
+// Best-effort by design: it retries the write once, then logs a WARNING and
+// gives up rather than failing. The caller has already persisted the issued
+// credential to state.json and the token is single-use (expired), so
+// availability of enrolment outweighs secret hygiene of a dead token — e.g.
+// when the env directory permissions still block the unprivileged agent.
+func (c *Config) ScrubEnrolToken() {
 	var out []string
 	changed := false
 	for _, l := range c.lines {
@@ -143,17 +150,23 @@ func (c *Config) ScrubEnrolToken() error {
 		out = append(out, l.raw)
 	}
 	if !changed {
-		return nil
+		return
 	}
 	mode := os.FileMode(0o600)
 	if st, err := os.Stat(c.EnvPath); err == nil {
 		mode = st.Mode().Perm()
 	}
-	if err := writeFileAtomic(c.EnvPath, []byte(strings.Join(out, "\n")+"\n"), mode); err != nil {
-		return fmt.Errorf("scrub ENROL_TOKEN from %s: %w", c.EnvPath, err)
+	data := []byte(strings.Join(out, "\n") + "\n")
+	// One retry: transient failures (e.g. antivirus, brief FS busy) resolve;
+	// persistent permission errors are reported once and then tolerated.
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		if err = writeFileAtomic(c.EnvPath, data, mode); err == nil {
+			c.EnrolToken = ""
+			return
+		}
 	}
-	c.EnrolToken = ""
-	return nil
+	log.Printf("WARNING: could not scrub ENROL_TOKEN from %s: %v — remove it manually to avoid leaving a (single-use, expired) token on disk", c.EnvPath, err)
 }
 
 // unquote strips one layer of matching single or double quotes. No shell

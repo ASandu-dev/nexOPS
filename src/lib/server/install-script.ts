@@ -112,7 +112,11 @@ fi
 install -m 0755 -o root -g root "$WORKDIR/nexops-agent-linux-$ARCH" /usr/local/bin/nexops-agent
 log "installed /usr/local/bin/nexops-agent"
 
-install -d -m 0755 -o root -g nexops-agent /etc/nexops
+# 0770 (not 0755): the agent scrubs its one-time ENROL_TOKEN from agent.env
+# after first enrolment via an atomic temp-file rename, which requires write
+# on the directory. Group write is granted for that; file contents stay
+# individually protected (0640 root:nexops-agent).
+install -d -m 0770 -o root -g nexops-agent /etc/nexops
 ENV_TMP=$(mktemp)
 cat > "$ENV_TMP" <<EOF
 CONTROL_PLANE_URL=$CONTROL_PLANE_URL
@@ -121,6 +125,9 @@ OS=$OS
 EOF
 # 0640, not 0600: the unit runs as User=nexops-agent, so the GROUP needs read
 # access or the agent dies on start with "permission denied" and crash-loops.
+# After the post-enrol scrub the atomic rename makes the file agent-owned
+# (same mode); root can still read it for systemd EnvironmentFile= at boot —
+# acceptable trade-off since only non-secret keys remain.
 install -m 0640 -o root -g nexops-agent "$ENV_TMP" /etc/nexops/agent.env
 rm -f "$ENV_TMP"
 log "wrote /etc/nexops/agent.env (0640, root:nexops-agent)"
@@ -194,7 +201,13 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 LockPersonality=true
-ReadWritePaths=/var/lib/nexops
+# ProtectSystem=strict makes the whole filesystem read-only inside the mount
+# namespace, and the namespace is inherited by the sudo'd apt helper. apt/dpkg
+# must be able to update their own state (/var/lib/apt, /var/lib/dpkg,
+# /var/cache/apt, /var/log/apt) and dpkg additionally appends
+# /var/log/dpkg.log, so those specific paths must stay writable even though
+# everything else remains read-only.
+ReadWritePaths=/var/lib/nexops /var/lib/apt /var/lib/dpkg /var/cache/apt /var/log/apt /var/log/dpkg.log
 
 [Install]
 WantedBy=multi-user.target

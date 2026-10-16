@@ -78,9 +78,9 @@ func Ensure(ctx context.Context, cfg *config.Config, st *config.State, client *p
 	}
 	// The token is single-use and now consumed; remove it from disk so a
 	// leaked agent.env no longer carries a (dead but sensitive) token.
-	if err := cfg.ScrubEnrolToken(); err != nil {
-		return fmt.Errorf("enrol: %w", err)
-	}
+	// Best-effort: a scrub failure logs a warning but must not fail
+	// enrolment — the credential is already persisted in state.json.
+	cfg.ScrubEnrolToken()
 	return nil
 }
 
