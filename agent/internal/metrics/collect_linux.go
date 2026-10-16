@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nexops/agent/internal/apt"
 	"github.com/nexops/agent/internal/protocol"
 	"github.com/nexops/agent/internal/units"
 )
@@ -267,14 +268,17 @@ func (c *Collector) collectPkgUpdates(ctx context.Context) *protocol.PkgUpdateSu
 }
 
 func measurePkgUpdates(ctx context.Context) *protocol.PkgUpdateSummary {
-	if _, err := exec.LookPath("apt-get"); err != nil {
+	if !apt.Available() {
 		return nil
 	}
 	actx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(actx, "apt-get", "-s", "upgrade")
-	// LANG=C keeps "Inst " matchers stable regardless of host locale.
-	cmd.Env = append(os.Environ(), "LANG=C", "LC_ALL=C")
+	// Simulate goes through the sudoers apt helper when installed (unlike the
+	// direct apt-get call this replaced, which needed root the agent lacks).
+	cmd, err := apt.AptCommand(actx, apt.Simulate)
+	if err != nil {
+		return nil
+	}
 	raw, err := cmd.Output()
 	if err != nil {
 		return nil

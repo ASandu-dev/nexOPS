@@ -2,11 +2,13 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nexops/agent/internal/apt"
 	"github.com/nexops/agent/internal/protocol"
 )
 
@@ -65,27 +67,80 @@ func TestBuildSpecServiceStatusRejectsInjection(t *testing.T) {
 	}
 }
 
-func TestBuildSpecKnownTypes(t *testing.T) {
+func TestBuildSpecAptJobTypesRouteToWhitelistedSub(t *testing.T) {
 	cases := []struct {
 		jobType string
-		name    string
-		args    []string
+		wantSub apt.Sub
 	}{
-		{protocol.JobAPTUpdate, "apt-get", []string{"update", "-y"}},
-		{protocol.JobAPTUpgrade, "apt-get", []string{"upgrade", "-y"}},
-		{protocol.JobCheckUpdates, "apt-get", []string{"-s", "upgrade"}},
+		{protocol.JobAPTUpdate, apt.Update},
+		{protocol.JobAPTUpgrade, apt.Upgrade},
+		{protocol.JobCheckUpdates, apt.Simulate},
 	}
 	for _, c := range cases {
-		spec, err := buildSpec(protocol.Job{Type: c.jobType})
+		var got apt.Sub
+		spec, err := buildSpecWith(protocol.Job{Type: c.jobType}, func(sub apt.Sub) (apt.Spec, error) {
+			got = sub
+			return apt.Spec{Name: "sudo", Args: []string{"-n", apt.HelperPath, string(sub)}}, nil
+		})
 		if err != nil {
 			t.Fatalf("%s: %v", c.jobType, err)
 		}
-		if spec.name != c.name || strings.Join(spec.args, " ") != strings.Join(c.args, " ") {
+		if got != c.wantSub {
+			t.Errorf("%s → sub %q, want %q", c.jobType, got, c.wantSub)
+		}
+		if spec.name != "sudo" || len(spec.args) != 3 || spec.args[2] != string(c.wantSub) {
 			t.Errorf("%s → %s %v", c.jobType, spec.name, spec.args)
 		}
 	}
+	// SERVICE_STATUS is read-only and must never be routed through apt.
+	aptCalled := false
+	if _, err := buildSpecWith(
+		protocol.Job{Type: protocol.JobServiceState, Params: map[string]any{"service": "nginx"}},
+		func(apt.Sub) (apt.Spec, error) { aptCalled = true; return apt.Spec{}, nil },
+	); err != nil {
+		t.Fatal(err)
+	}
+	if aptCalled {
+		t.Fatal("SERVICE_STATUS must not consult the apt resolver")
+	}
 	if _, err := buildSpec(protocol.Job{Type: "RM_RF"}); err == nil {
 		t.Fatal("unknown job type must error")
+	}
+}
+
+// TestAptSubForJob pins the closed job-type → helper-subcommand table.
+func TestAptSubForJob(t *testing.T) {
+	cases := []struct {
+		jobType string
+		want    apt.Sub
+	}{
+		{protocol.JobAPTUpdate, apt.Update},
+		{protocol.JobAPTUpgrade, apt.Upgrade},
+		{protocol.JobCheckUpdates, apt.Simulate},
+	}
+	for _, c := range cases {
+		got, err := aptSubForJob(c.jobType)
+		if err != nil {
+			t.Fatalf("%s: %v", c.jobType, err)
+		}
+		if got != c.want {
+			t.Errorf("%s → %q, want %q", c.jobType, got, c.want)
+		}
+	}
+	for _, jobType := range []string{protocol.JobServiceState, "", "APT_PURGE"} {
+		if _, err := aptSubForJob(jobType); err == nil {
+			t.Errorf("%q must not map to an apt subcommand", jobType)
+		}
+	}
+}
+
+// TestBuildSpecAptResolverErrorPropagates: a spec-resolution failure is
+// reported as a failed job, never as a silent fallback command.
+func TestBuildSpecAptResolverErrorPropagates(t *testing.T) {
+	_, err := buildSpecWith(protocol.Job{Type: protocol.JobAPTUpdate},
+		func(apt.Sub) (apt.Spec, error) { return apt.Spec{}, errors.New("helper rejected subcommand") })
+	if err == nil {
+		t.Fatal("resolver error must propagate")
 	}
 }
 

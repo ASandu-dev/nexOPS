@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nexops/agent/internal/apt"
 	"github.com/nexops/agent/internal/protocol"
 	"github.com/nexops/agent/internal/units"
 )
@@ -100,24 +101,27 @@ func resultFrom(res execResult, timeout time.Duration, started time.Time) protoc
 }
 
 // buildSpec translates the job DTO into an argv vector, validating every
-// parameter that reaches the command line.
+// parameter that reaches the command line. Apt maintenance goes through
+// apt.SpecFor (sudoers helper on hosts, direct apt-get in dev/containers);
+// SERVICE_STATUS stays a plain unprivileged systemctl call.
 func buildSpec(job protocol.Job) (cmdSpec, error) {
+	return buildSpecWith(job, apt.SpecFor)
+}
+
+// buildSpecWith takes the apt spec resolver so tests can pin the routing
+// deterministically; production always passes apt.SpecFor.
+func buildSpecWith(job protocol.Job, aptSpec func(apt.Sub) (apt.Spec, error)) (cmdSpec, error) {
 	switch job.Type {
-	case protocol.JobAPTUpdate:
-		return cmdSpec{name: "apt-get", args: []string{"update", "-y"}}, nil
-	case protocol.JobAPTUpgrade:
-		return cmdSpec{
-			name: "apt-get",
-			args: []string{"upgrade", "-y"},
-			// Non-interactive so apt never blocks on conffile prompts.
-			env: []string{"DEBIAN_FRONTEND=noninteractive"},
-		}, nil
-	case protocol.JobCheckUpdates:
-		return cmdSpec{
-			name: "apt-get",
-			args: []string{"-s", "upgrade"},
-			env:  []string{"LANG=C", "LC_ALL=C"},
-		}, nil
+	case protocol.JobAPTUpdate, protocol.JobAPTUpgrade, protocol.JobCheckUpdates:
+		sub, err := aptSubForJob(job.Type)
+		if err != nil {
+			return cmdSpec{}, err
+		}
+		s, err := aptSpec(sub)
+		if err != nil {
+			return cmdSpec{}, err
+		}
+		return cmdSpec{name: s.Name, args: s.Args, env: s.Env}, nil
 	case protocol.JobServiceState:
 		// params.service is operator-supplied; reject anything that is not a
 		// plain unit name before it becomes argv (no injection surface).
@@ -140,6 +144,21 @@ func buildSpec(job protocol.Job) (cmdSpec, error) {
 	default:
 		return cmdSpec{}, fmt.Errorf("unknown job type %q", job.Type)
 	}
+}
+
+// aptSubForJob hard-maps apt maintenance job types onto the whitelisted
+// helper subcommands. Deliberately a closed table: a job type that is not in
+// it can never reach argv as an apt invocation.
+func aptSubForJob(jobType string) (apt.Sub, error) {
+	switch jobType {
+	case protocol.JobAPTUpdate:
+		return apt.Update, nil
+	case protocol.JobAPTUpgrade:
+		return apt.Upgrade, nil
+	case protocol.JobCheckUpdates:
+		return apt.Simulate, nil
+	}
+	return "", fmt.Errorf("job type %q is not an apt maintenance job", jobType)
 }
 
 // execResult is the raw outcome of running a command.

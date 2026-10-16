@@ -9,7 +9,8 @@ import { createHash } from "node:crypto";
  *
  * Escaping notes: `\\n` becomes a literal backslash-n for `printf` inside the
  * rendered script, and `\${…}` becomes a literal `${…}` for bash parameter
- * expansion. Exit codes: 1 root, 2 env/usage, 3 checksum, 4 download, 5 systemd.
+ * expansion. Exit codes: 1 root, 2 env/usage, 3 checksum, 4 download, 5 systemd,
+ * 6 sudoers validation.
  */
 export const INSTALL_SCRIPT_NAME = "install.sh";
 
@@ -99,6 +100,13 @@ if ! id -u nexops-agent >/dev/null 2>&1; then
     --create-home --shell /usr/sbin/nologin nexops-agent
 fi
 install -d -m 0755 -o nexops-agent -g nexops-agent /var/lib/nexops
+# Legacy cleanup: a superseded agent version kept its credential here; the
+# server-side credential was revoked when the old target was removed, so the
+# leftover file is dead state that would only confuse a reinstall.
+if [ -f /var/lib/nexops/credentials.json ]; then
+  rm -f /var/lib/nexops/credentials.json
+  log "removed legacy credentials file from a previous agent install"
+fi
 
 # --- 5. Install binary and credentials --------------------------------------
 install -m 0755 -o root -g root "$WORKDIR/nexops-agent-linux-$ARCH" /usr/local/bin/nexops-agent
@@ -111,11 +119,56 @@ CONTROL_PLANE_URL=$CONTROL_PLANE_URL
 ENROL_TOKEN=$ENROL_TOKEN
 OS=$OS
 EOF
-install -m 0600 -o root -g nexops-agent "$ENV_TMP" /etc/nexops/agent.env
+# 0640, not 0600: the unit runs as User=nexops-agent, so the GROUP needs read
+# access or the agent dies on start with "permission denied" and crash-loops.
+install -m 0640 -o root -g nexops-agent "$ENV_TMP" /etc/nexops/agent.env
 rm -f "$ENV_TMP"
-log "wrote /etc/nexops/agent.env (0600, root:nexops-agent)"
+log "wrote /etc/nexops/agent.env (0640, root:nexops-agent)"
 
-# --- 6. systemd unit --------------------------------------------------------
+# --- 6. Privileged apt helper (least privilege) -----------------------------
+# apt maintenance needs root, but the agent must not run privileged in general.
+# Only this fixed three-subcommand dispatch is reachable via sudo, and it takes
+# no user input beyond the subcommand name itself.
+install -d -m 0755 -o root -g root /usr/local/libexec
+APT_TMP=$(mktemp)
+cat > "$APT_TMP" <<'EOF'
+#!/bin/sh
+# NexOPS privileged apt helper. Whitelisted subcommands only; no user input
+# reaches the shell beyond this single dispatch, so option/argument
+# injection is structurally impossible.
+set -eu
+[ "$#" -eq 1 ] || exit 64
+case "$1" in
+  update)   exec apt-get update -y ;;
+  upgrade)  exec env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y ;;
+  simulate) exec apt-get -s -o Debug::NoLocking=1 upgrade ;;
+  *)        exit 64 ;;
+esac
+EOF
+install -m 0755 -o root -g root "$APT_TMP" /usr/local/libexec/nexops-apt
+rm -f "$APT_TMP"
+log "installed /usr/local/libexec/nexops-apt (0755, root:root)"
+
+SUDO_TMP=$(mktemp)
+cat > "$SUDO_TMP" <<'EOF'
+nexops-agent ALL=(root) NOPASSWD: /usr/local/libexec/nexops-apt
+EOF
+install -m 0440 -o root -g root "$SUDO_TMP" /etc/sudoers.d/nexops-agent
+rm -f "$SUDO_TMP"
+if command -v visudo >/dev/null 2>&1; then
+  if ! visudo -cf /etc/sudoers.d/nexops-agent; then
+    # An invalid sudoers.d drop-in makes EVERY sudo invocation fail, so remove
+    # it before aborting or the host loses all sudo access.
+    rm -f /etc/sudoers.d/nexops-agent
+    err "visudo rejected /etc/sudoers.d/nexops-agent; removed it and aborted"
+    exit 6
+  fi
+  log "validated /etc/sudoers.d/nexops-agent with visudo (0440, root:root)"
+else
+  log "visudo not found; installed /etc/sudoers.d/nexops-agent unvalidated (0440, root:root)"
+fi
+
+# --- 7. systemd unit --------------------------------------------------------
 cat > /etc/systemd/system/nexops-agent.service <<'EOF'
 [Unit]
 Description=NexOPS fleet agent
@@ -131,14 +184,15 @@ ExecStart=/usr/local/bin/nexops-agent
 Restart=always
 RestartSec=5
 TimeoutStopSec=30
-NoNewPrivileges=true
+# The agent elevates ONLY via the audited /usr/local/libexec/nexops-apt
+# sudoers helper for apt maintenance. Do not re-add setuid-blocking hardening
+# directives here: they prevent sudo from elevating.
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-RestrictSUIDSGID=true
 LockPersonality=true
 ReadWritePaths=/var/lib/nexops
 
