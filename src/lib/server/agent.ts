@@ -103,7 +103,15 @@ export async function enrolAgent(input: EnrolInput): Promise<AgentEnrolResponse>
   const credentialHash = sha256(credential);
 
   const identity = await prisma.$transaction(async (tx) => {
-    await tx.enrolmentToken.update({ where: { id: token.id }, data: { usedAt: now } });
+    // Single-use guard: only the request that flips usedAt from null wins the
+    // race (CWE-362). A losing concurrent enrol rolls the transaction back.
+    const consumed = await tx.enrolmentToken.updateMany({
+      where: { id: token.id, usedAt: null },
+      data: { usedAt: now },
+    });
+    if (consumed.count === 0) {
+      throw unauthorized("Invalid enrolment token");
+    }
 
     const existing = await tx.agentIdentity.findUnique({ where: { targetId: token.targetId } });
     const identity = existing

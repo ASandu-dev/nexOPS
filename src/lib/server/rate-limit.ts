@@ -62,14 +62,25 @@ export function consumeToken(key: string, rule: RateLimitRule): RateLimitDecisio
   return { ok: false, retryAfterSec: Math.max(1, Math.ceil(deficit / rule.refillPerSec)) };
 }
 
-/** Client IP behind the reverse proxy; never trusted for auth, only for throttling. */
+/**
+ * Client IP behind the reverse proxy; never trusted for auth, only for
+ * throttling.
+ *
+ * Trust assumption (docs/DEPLOYMENT.md): exactly one reverse proxy fronts the
+ * control plane. It sets `x-real-ip` itself and APPENDS the peer address to
+ * `x-forwarded-for`, so earlier list entries are client-controlled and
+ * spoofable — only the last entry (or the proxy-set `x-real-ip`) is reliable.
+ */
 export function clientIp(headers: Headers): string {
+  const real = headers.get("x-real-ip")?.trim();
+  if (real) return real;
   const forwarded = headers.get("x-forwarded-for");
   if (forwarded) {
-    const first = forwarded.split(",")[0];
-    if (first) return first.trim();
+    const entries = forwarded.split(",");
+    const last = entries[entries.length - 1]?.trim();
+    if (last) return last;
   }
-  return headers.get("x-real-ip") ?? "unknown";
+  return "unknown";
 }
 
 /** Shared bucket capacities for the routes that must be throttled (ARCHITECTURE.md §5). */

@@ -10,6 +10,7 @@ export type ErrorCode =
   | "CONFLICT"
   | "RATE_LIMITED"
   | "BAD_REQUEST"
+  | "PAYLOAD_TOO_LARGE"
   | "INTERNAL_ERROR";
 
 export interface FieldIssue {
@@ -86,8 +87,18 @@ export function parseQuery<T>(
   return result.data;
 }
 
+/** Upper bound on accepted request bodies (bytes), enforced pre-parse (CWE-770). */
+const MAX_BODY_BYTES = 1_048_576;
+
 /** Read and decode a JSON request body; malformed JSON is a 400. */
 export async function readJson(request: Request): Promise<unknown> {
+  // Reject oversized bodies before buffering them. Content-Length can be
+  // absent (chunked transfer encoding), in which case parsing proceeds — an
+  // accepted residual risk covered by the reverse proxy's own body limits.
+  const declared = request.headers.get("content-length");
+  if (declared !== null && Number(declared) > MAX_BODY_BYTES) {
+    throw new ApiError(413, "PAYLOAD_TOO_LARGE", "Request body too large");
+  }
   try {
     return await request.json();
   } catch {

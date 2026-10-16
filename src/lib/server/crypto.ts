@@ -37,7 +37,9 @@ export function parseEd25519PublicKey(key: string): KeyObject | null {
   const trimmed = key.trim();
   if (trimmed.includes("BEGIN PUBLIC KEY")) {
     try {
-      return createPublicKey(trimmed);
+      // A PEM SPKI can encode any asymmetric algorithm; only Ed25519 is valid.
+      const pemKey = createPublicKey(trimmed);
+      return pemKey.asymmetricKeyType === "ed25519" ? pemKey : null;
     } catch {
       return null;
     }
@@ -50,10 +52,11 @@ export function parseEd25519PublicKey(key: string): KeyObject | null {
   }
   if (raw.length !== 32) return null;
   try {
-    return createPublicKey({
+    const jwkKey = createPublicKey({
       key: { kty: "OKP", crv: "Ed25519", x: raw.toString("base64url") },
       format: "jwk",
     });
+    return jwkKey.asymmetricKeyType === "ed25519" ? jwkKey : null;
   } catch {
     return null;
   }
