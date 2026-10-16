@@ -68,9 +68,9 @@ COPY --from=agent-builder --chown=nextjs:nodejs /agent-dist ./agent-dist
 USER nextjs
 EXPOSE 3000
 
-# Healthcheck: lightweight root page fetch (no auth). Next.js standalone serves /.
+# Healthcheck: /api/health is public and returns 200 without Clerk/DB.
 # Falls back to process check if network unavailable.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "server.js"]
