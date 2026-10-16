@@ -209,6 +209,22 @@ func LoadState(dir string) (State, error) {
 	return st, nil
 }
 
+// MatchesControlPlane reports whether the stored identity was issued by
+// controlPlaneURL. URLs are compared after trimming surrounding whitespace
+// and trailing slashes. The env file (root-owned) is authoritative: a
+// mismatch means the credential belongs to a different control plane and
+// must be discarded, not retried.
+func (s *State) MatchesControlPlane(controlPlaneURL string) bool {
+	if s.ControlPlaneURL == "" {
+		return false
+	}
+	return normalizeControlPlaneURL(s.ControlPlaneURL) == normalizeControlPlaneURL(controlPlaneURL)
+}
+
+func normalizeControlPlaneURL(u string) string {
+	return strings.TrimRight(strings.TrimSpace(u), "/")
+}
+
 // SaveState persists state atomically (temp file + rename) with mode 0600.
 func SaveState(dir string, st State) error {
 	raw, err := json.Marshal(st)

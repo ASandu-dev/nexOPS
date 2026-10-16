@@ -53,6 +53,19 @@ func Run(ctx context.Context, o Options) error {
 		o.Collector = metrics.NewCollector(o.Config.WatchedServices)
 	}
 
+	// A credential issued by a different control plane (env file is
+	// authoritative) is useless here: treat the host as freshly installed.
+	// key.pem is deliberately kept — re-proving possession of the same key on
+	// the new control plane is fine.
+	if o.State.Credential != "" && !o.State.MatchesControlPlane(o.Config.ControlPlaneURL) {
+		o.Logger.Printf("stored identity was issued by control plane %s, not %s — discarding it and re-enrolling",
+			o.State.ControlPlaneURL, o.Config.ControlPlaneURL)
+		*o.State = config.State{}
+		if o.Config.EnrolToken == "" {
+			return fmt.Errorf("identity belongs to a different control plane and cannot be re-enrolled: ENROL_TOKEN is missing from %s — re-run the install command from the target's enrolment page", o.Config.EnvPath)
+		}
+	}
+
 	if err := enrolWithBackoff(ctx, o); err != nil {
 		return err
 	}
@@ -60,9 +73,22 @@ func Run(ctx context.Context, o Options) error {
 	o.Logger.Printf("enrolled as agent %s (target %s); heartbeat every %s",
 		o.State.AgentID, o.State.TargetID, interval)
 
-	a := &loop{opts: o}
-	return a.run(ctx, interval)
+	a := &loop{opts: o, interval: interval}
+	return a.run(ctx)
 }
+
+// errReEnrolled signals that a rejected credential was replaced and the loop
+// should poll again immediately instead of backing off.
+var errReEnrolled = errors.New("credential re-enrolled")
+
+// fatalError wraps an unrecoverable condition (e.g. credential rejected and
+// no ENROL_TOKEN to re-enrol with). The loop propagates it so the process
+// exits non-zero; systemd's Restart= policy then backs off while the
+// operator fixes the host.
+type fatalError struct{ err error }
+
+func (e fatalError) Error() string { return e.err.Error() }
+func (e fatalError) Unwrap() error { return e.err }
 
 // enrolWithBackoff retries enrolment until it succeeds or ctx is cancelled.
 // A control plane that is briefly down at boot must not leave the host
@@ -96,24 +122,36 @@ func heartbeatInterval(o Options) time.Duration {
 }
 
 type loop struct {
-	opts Options
+	opts     Options
+	interval time.Duration
 }
 
-func (a *loop) run(ctx context.Context, interval time.Duration) error {
+func (a *loop) run(ctx context.Context) error {
 	attempt := 0
 	for {
 		_, err := a.poll(ctx)
 		switch {
 		case err == nil:
 			attempt = 0
-			if sleepCtx(ctx, interval) != nil {
+			if sleepCtx(ctx, a.interval) != nil {
 				return nil // shutdown
 			}
+		case errors.Is(err, errReEnrolled):
+			// Fresh credential: poll again immediately with the
+			// (possibly updated) enrolment interval.
+			a.opts.Logger.Printf("re-enrolled; resuming heartbeats as agent %s (target %s)",
+				a.opts.State.AgentID, a.opts.State.TargetID)
+			a.interval = heartbeatInterval(a.opts)
+			attempt = 0
 		case ctx.Err() != nil:
 			// Shutting down mid-poll: the result of any running job was
 			// already attempted; stop cleanly.
 			return nil
 		default:
+			var fatal fatalError
+			if errors.As(err, &fatal) {
+				return err
+			}
 			a.opts.Logger.Printf("heartbeat failed (attempt %d): %v", attempt+1, err)
 			if sleepBackoff(ctx, attempt) != nil {
 				return nil
@@ -134,9 +172,15 @@ func (a *loop) poll(ctx context.Context) (int, error) {
 
 	resp, err := a.opts.Client.Heartbeat(ctx, a.opts.State.Credential, hb)
 	if err != nil {
-		var apiErr *protocol.APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == 401 {
-			a.opts.Logger.Printf("control plane rejected the credential (401) — was this target revoked? retrying with backoff")
+		if protocol.IsAuthError(err) {
+			if a.opts.Config.EnrolToken == "" {
+				return 0, fatalError{fmt.Errorf("credential rejected by control plane; re-enrol required — re-run the install command from the target's enrolment page (ENROL_TOKEN missing from %s)", a.opts.Config.EnvPath)}
+			}
+			a.opts.Logger.Printf("credential rejected by control plane (%v); clearing it and re-enrolling", err)
+			if rerr := a.reEnrol(ctx); rerr != nil {
+				return 0, rerr
+			}
+			return 0, errReEnrolled
 		}
 		return 0, err
 	}
@@ -169,14 +213,30 @@ func (a *loop) poll(ctx context.Context) (int, error) {
 // reportResult retries until the control plane accepts the result, so a
 // transient 5xx cannot lose a job's terminal state. During shutdown exactly
 // one attempt is made (with a fresh context so the cancelled parent does not
-// abort the POST).
+// abort the POST). If the credential is rejected mid-flight the agent
+// re-enrols once and retries; without an ENROL_TOKEN the result is dropped —
+// losing one result is recoverable (the control plane times out stalled
+// jobs), retrying forever with a revoked credential is not.
 func (a *loop) reportResult(ctx context.Context, jobID string, result protocol.JobResultRequest) error {
+	reEnrolled := false
 	for attempt := 0; ; attempt++ {
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resultPostTimeout)
 		err := a.opts.Client.JobResult(rctx, a.opts.State.Credential, jobID, result)
 		cancel()
 		if err == nil {
 			return nil
+		}
+		if protocol.IsAuthError(err) {
+			if reEnrolled || a.opts.Config.EnrolToken == "" {
+				a.opts.Logger.Printf("result for job %s dropped: credential rejected by control plane and no re-enrol possible (%v)", jobID, err)
+				return nil
+			}
+			a.opts.Logger.Printf("result post for job %s rejected (auth); re-enrolling and retrying once", jobID)
+			if rerr := a.reEnrol(ctx); rerr != nil {
+				return rerr
+			}
+			reEnrolled = true
+			continue
 		}
 		if ctx.Err() != nil {
 			// Already used our one shutdown attempt.
@@ -188,6 +248,18 @@ func (a *loop) reportResult(ctx context.Context, jobID string, result protocol.J
 			return err
 		}
 	}
+}
+
+// reEnrol clears the rejected credential (memory + state.json) and enrols
+// again with the configured ENROL_TOKEN. Only called from the main loop —
+// poll and reportResult run sequentially — so it can never race the job
+// runner. key.pem is kept.
+func (a *loop) reEnrol(ctx context.Context) error {
+	a.opts.State.Credential = ""
+	if err := config.SaveState(a.opts.Config.StateDir, *a.opts.State); err != nil {
+		return fmt.Errorf("clear rejected credential from state: %w", err)
+	}
+	return enrolWithBackoff(ctx, a.opts)
 }
 
 // sleepCtx waits for d or until ctx is cancelled.

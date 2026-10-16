@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -36,6 +37,15 @@ func (e *APIError) Error() string {
 // revoked credential can be re-provisioned server-side while we run.
 func (e *APIError) Retryable() bool {
 	return e.StatusCode >= 500 || e.StatusCode == http.StatusTooManyRequests
+}
+
+// IsAuthError reports whether err is a 401/403 from the control plane, i.e.
+// the bearer credential was rejected or revoked. The caller must not retry
+// with the same credential: it has to clear the stored identity and re-enrol.
+func IsAuthError(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) &&
+		(apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden)
 }
 
 // Client talks to the control plane over TLS. Plain http:// is accepted only

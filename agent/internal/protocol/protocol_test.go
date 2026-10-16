@@ -1,7 +1,12 @@
 package protocol
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"sort"
 	"strings"
@@ -297,5 +302,59 @@ func TestHeartbeatResponseClientNormalisesNilJobs(t *testing.T) {
 	}
 	if len(resp.Jobs) != 0 {
 		t.Fatal("expected empty jobs")
+	}
+}
+
+// TestIsAuthErrorClassification pins the 401/403-vs-everything-else decision
+// the agent loop uses to decide between re-enrolment and backoff.
+func TestIsAuthErrorClassification(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"401", &APIError{StatusCode: http.StatusUnauthorized, Body: "revoked"}, true},
+		{"403", &APIError{StatusCode: http.StatusForbidden, Body: "forbidden"}, true},
+		{"wrapped 401", fmt.Errorf("heartbeat: %w", &APIError{StatusCode: http.StatusUnauthorized}), true},
+		{"500", &APIError{StatusCode: http.StatusInternalServerError}, false},
+		{"429", &APIError{StatusCode: http.StatusTooManyRequests}, false},
+		{"404", &APIError{StatusCode: http.StatusNotFound}, false},
+		{"transport error", errors.New("dial tcp: connection refused"), false},
+		{"nil", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsAuthError(tc.err); got != tc.want {
+				t.Fatalf("IsAuthError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestClientHeartbeatAuthErrorStatus proves the client surfaces the HTTP
+// status through APIError so the loop can classify a revoked credential.
+func TestClientHeartbeatAuthErrorStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer revoked" {
+			t.Errorf("Authorization = %q, want %q", got, "Bearer revoked")
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"credential revoked"}`))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Heartbeat(context.Background(), "revoked", HeartbeatRequest{
+		CapturedAt: "2026-01-01T12:00:00Z", Hostname: "vm-01", AgentVersion: "0.1.0",
+	})
+	if !IsAuthError(err) {
+		t.Fatalf("IsAuthError(%v) = false, want true", err)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("APIError status not preserved: %v", err)
 	}
 }
