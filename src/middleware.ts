@@ -20,9 +20,43 @@ const isPublicRoute = createRouteMatcher([
   "/sign-up(.*)",
 ]);
 
+/*
+ * The standalone server binds to HOSTNAME=0.0.0.0 in the container, and
+ * Next.js then reports req.url as http://0.0.0.0:3000/... Build origins from
+ * the request headers instead so redirects never hand the browser an
+ * unroutable address.
+ */
+const requestOrigin = (req: { url: string; headers: Headers }): string => {
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  if (!host) {
+    return new URL(req.url).origin;
+  }
+  const proto = req.headers.get("x-forwarded-proto") ?? "http";
+  return `${proto}://${host}`;
+};
+
 // Built once at module load; Clerk is only initialized when this handler runs.
-const clerkHandler = clerkMiddleware(async (auth) => {
-  await auth.protect();
+const clerkHandler = clerkMiddleware(async (auth, req) => {
+  const { userId } = await auth();
+  if (userId) {
+    return;
+  }
+
+  // API consumers are not browsers: keep Clerk's default for them
+  // (404/401 when unauthenticated) instead of an HTML redirect.
+  if (req.nextUrl.pathname.startsWith("/api")) {
+    await auth.protect();
+    return;
+  }
+
+  // auth.protect() only redirects requests it recognises as page
+  // navigations (Accept: text/html / sec-fetch-dest: document) and rewrites
+  // everything else to a 404. Redirect explicitly so unauthenticated deep
+  // links always land on the public sign-in page with a return URL.
+  const origin = requestOrigin(req);
+  const signInUrl = new URL("/sign-in", origin);
+  signInUrl.searchParams.set("redirect_url", `${origin}${req.nextUrl.pathname}${req.nextUrl.search}`);
+  return NextResponse.redirect(signInUrl);
 });
 
 const middleware: NextMiddleware = async (req, event) => {
