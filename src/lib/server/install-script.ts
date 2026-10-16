@@ -194,20 +194,26 @@ TimeoutStopSec=30
 # The agent elevates ONLY via the audited /usr/local/libexec/nexops-apt
 # sudoers helper for apt maintenance. Do not re-add setuid-blocking hardening
 # directives here: they prevent sudo from elevating.
-ProtectSystem=strict
+# ProtectSystem=full keeps /usr and /boot read-only; /etc must stay writable
+# because dpkg/conffiles/updated-alternatives write there during upgrades, and
+# the only privileged path is the audited /usr/local/libexec/nexops-apt
+# sudoers helper. The previous strict setting made /etc read-only and broke
+# upgrades (debconf mkstemp EROFS) and the enrol-token scrub without adding
+# meaningful security over the sudoers boundary.
+ProtectSystem=full
 ProtectHome=true
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 LockPersonality=true
-# ProtectSystem=strict makes the whole filesystem read-only inside the mount
-# namespace, and the namespace is inherited by the sudo'd apt helper. apt/dpkg
-# must be able to update their own state (/var/lib/apt, /var/lib/dpkg,
-# /var/cache/apt, /var/log/apt) and dpkg additionally appends
-# /var/log/dpkg.log, so those specific paths must stay writable even though
-# everything else remains read-only.
-ReadWritePaths=/var/lib/nexops /var/lib/apt /var/lib/dpkg /var/cache/apt /var/log/apt /var/log/dpkg.log
+# The mount namespace is inherited by the sudo'd apt helper. apt/dpkg must
+# update their own state (/var/lib/apt, /var/lib/dpkg, /var/cache/apt,
+# /var/log/apt) and dpkg appends /var/log/dpkg.log; debconf needs
+# /var/cache/debconf for its mkstemp templates. /etc/nexops is listed
+# explicitly for the agent's enrol-token scrub (with ProtectSystem=full /etc is
+# already writable; these entries document the required write surface).
+ReadWritePaths=/var/lib/nexops /var/lib/apt /var/lib/dpkg /var/cache/apt /var/cache/debconf /var/log/apt /var/log/dpkg.log /etc/nexops
 
 [Install]
 WantedBy=multi-user.target
