@@ -40,3 +40,4 @@ docker-compose.override.yml
 # tooling
 .opencode
 
+.clerk/

@@ -14,6 +14,10 @@ const isPublicRoute = createRouteMatcher([
   "/api/agent(.*)",
   "/api/agent/releases(.*)",
   "/api/health(.*)",
+  // Auth pages must stay public or auth.protect() would bounce /sign-in
+  // back to itself in an endless redirect loop.
+  "/sign-in(.*)",
+  "/sign-up(.*)",
 ]);
 
 // Built once at module load; Clerk is only initialized when this handler runs.
