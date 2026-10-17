@@ -40,6 +40,7 @@ export interface JobDetailDialogProps {
 export function JobDetailDialog({ jobId, open, onOpenChange, onChanged }: JobDetailDialogProps) {
   const { notify } = useSnackbar();
   const [cancelling, setCancelling] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
   // Poll only while the job is still running; terminal jobs never change again.
   const [polling, setPolling] = useState(false);
@@ -59,7 +60,8 @@ export function JobDetailDialog({ jobId, open, onOpenChange, onChanged }: JobDet
     setCancelling(true);
     try {
       await apiFetch<JobDto>(`/api/jobs/${jobId}/cancel`, { method: "POST" });
-      notify({ message: "Job cancelled.", variant: "success" });
+      notify({ message: "Cancel sent to the target.", variant: "success" });
+      setConfirming(false);
       refresh();
       onChanged?.();
     } catch (caught) {
@@ -131,20 +133,41 @@ export function JobDetailDialog({ jobId, open, onOpenChange, onChanged }: JobDet
         </div>
       ) : null}
 
-      <DialogFooter>
-        {isActive ? (
-          <Button
-            variant="danger"
-            onClick={cancel}
-            loading={cancelling}
-            leadingIcon={<Ban className="size-4" aria-hidden="true" />}
-          >
-            Cancel job
-          </Button>
-        ) : null}
-        <Button variant="text" onClick={() => onOpenChange(false)}>
-          Close
-        </Button>
+      <DialogFooter className="flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-end">
+        {isActive && confirming ? (
+          <>
+            <p className="mr-auto text-sm text-on-surface-variant">
+              Sends a kill to the job&apos;s process on the target. The agent stops it within a few
+              seconds.
+            </p>
+            <Button variant="text" onClick={() => setConfirming(false)} disabled={cancelling}>
+              Keep running
+            </Button>
+            <Button
+              variant="danger"
+              onClick={cancel}
+              loading={cancelling}
+              leadingIcon={<Ban className="size-4" aria-hidden="true" />}
+            >
+              Confirm cancel
+            </Button>
+          </>
+        ) : (
+          <>
+            {isActive ? (
+              <Button
+                variant="danger"
+                onClick={() => setConfirming(true)}
+                leadingIcon={<Ban className="size-4" aria-hidden="true" />}
+              >
+                Cancel job
+              </Button>
+            ) : null}
+            <Button variant="text" onClick={() => onOpenChange(false)}>
+              Close
+            </Button>
+          </>
+        )}
       </DialogFooter>
     </Dialog>
   );

@@ -333,15 +333,19 @@ export interface HeartbeatRequest {
   agentVersion: string;
   services: ServiceStateDto[];
   pkgUpdates: PkgUpdateSummaryDto | null;
+  /** Jobs the agent is currently running or has accepted but not finished. */
+  activeJobIds?: string[];
 }
 
 export interface HeartbeatResponse {
   jobs: JobDto[];
+  /** Intersection of activeJobIds with jobs that are now CANCELLED. */
+  cancelledJobIds?: string[];
 }
 
 export interface JobResultRequest {
-  /** TIMED_OUT is accepted because the agent reports it after killing the process group. */
-  status: Extract<JobStatus, "SUCCEEDED" | "FAILED" | "TIMED_OUT">;
+  /** TIMED_OUT/CANCELLED are accepted because the agent reports them after killing the process group. */
+  status: Extract<JobStatus, "SUCCEEDED" | "FAILED" | "TIMED_OUT" | "CANCELLED">;
   exitCode: number | null;
   stdoutTail: string | null;
   stderrTail: string | null;

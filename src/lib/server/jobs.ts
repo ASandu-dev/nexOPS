@@ -144,17 +144,21 @@ export async function createJob(input: CreateJobInput, requestedBy: string): Pro
   return job;
 }
 
-/** QUEUED → CANCELLED only; anything already dispatched/terminal is a 409. */
+/** QUEUED/DISPATCHED/RUNNING → CANCELLED; terminal jobs are a 409. */
 export async function cancelJob(jobId: string, actorId: string): Promise<Job> {
   const existing = await prisma.job.findUnique({ where: { id: jobId } });
   if (!existing) throw notFound("Job not found");
 
+  if (isTerminal(existing.status)) {
+    throw conflict(`Job is ${existing.status}; terminal jobs cannot be cancelled`);
+  }
+
   const result = await prisma.job.updateMany({
-    where: { id: jobId, status: "QUEUED" },
+    where: { id: jobId, status: { in: ["QUEUED", "DISPATCHED", "RUNNING"] } },
     data: { status: "CANCELLED", finishedAt: new Date(), error: "Cancelled by operator" },
   });
   if (result.count === 0) {
-    throw conflict(`Job is ${existing.status}; only queued jobs can be cancelled`);
+    throw conflict(`Job is ${existing.status}; cannot be cancelled`);
   }
 
   await recordAudit({

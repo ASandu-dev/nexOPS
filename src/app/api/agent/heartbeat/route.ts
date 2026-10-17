@@ -28,6 +28,6 @@ export async function POST(request: Request): Promise<Response> {
       });
     }
 
-    return json(await collectDispatchedJobs(target.id));
+    return json(await collectDispatchedJobs(target.id, payload.activeJobIds));
   });
 }

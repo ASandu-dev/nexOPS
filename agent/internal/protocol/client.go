@@ -94,6 +94,9 @@ func (c *Client) Heartbeat(ctx context.Context, credential string, req Heartbeat
 	if resp.Jobs == nil {
 		resp.Jobs = []Job{}
 	}
+	if resp.CancelledJobIds == nil {
+		resp.CancelledJobIds = []string{}
+	}
 	return resp, nil
 }
 

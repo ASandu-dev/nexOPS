@@ -217,7 +217,27 @@ export async function submitJobResult(
 }
 
 /** Queued jobs handed to the agent on this poll, already moved to DISPATCHED. */
-export async function collectDispatchedJobs(targetId: string): Promise<HeartbeatResponse> {
+export async function collectDispatchedJobs(
+  targetId: string,
+  activeJobIds?: string[],
+): Promise<HeartbeatResponse> {
   const jobs = await dispatchQueuedJobs(targetId);
-  return { jobs: jobs.map((job) => toJobDto(job)) };
+  let cancelledJobIds: string[] | undefined;
+  if (activeJobIds && activeJobIds.length > 0) {
+    const cancelled = await prisma.job.findMany({
+      where: {
+        id: { in: activeJobIds },
+        targetId,
+        status: "CANCELLED",
+      },
+      select: { id: true },
+    });
+    if (cancelled.length > 0) {
+      cancelledJobIds = cancelled.map((c) => c.id);
+    }
+  }
+  return {
+    jobs: jobs.map((job) => toJobDto(job)),
+    ...(cancelledJobIds ? { cancelledJobIds } : {}),
+  };
 }

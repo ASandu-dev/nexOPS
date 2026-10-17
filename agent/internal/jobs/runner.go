@@ -74,25 +74,37 @@ func (r *Runner) Run(ctx context.Context, job protocol.Job) protocol.JobResultRe
 }
 
 // resultFrom maps an exec outcome onto the wire result. A timeout is reported
-// as TIMED_OUT (matching ARCHITECTURE.md §3); the control plane's own watchdog
-// transitions jobs the same way if the agent never reports back.
+// as TIMED_OUT and an operator cancel as CANCELLED (matching ARCHITECTURE.md
+// §3); the control plane's own watchdog transitions timed-out jobs the same
+// way if the agent never reports back.
 func resultFrom(res execResult, timeout time.Duration, started time.Time) protocol.JobResultRequest {
 	status := protocol.ResultSucceeded
-	if res.timedOut {
+	switch {
+	case res.cancelled:
+		status = protocol.ResultCancelled
+	case res.timedOut:
 		status = protocol.ResultTimedOut
-	} else if res.err != nil {
+	case res.err != nil:
 		status = protocol.ResultFailed
 	}
 	stderr := res.stderr
-	if res.timedOut {
+	switch {
+	case res.cancelled:
+		stderr = appendNote(stderr, "cancelled by operator")
+	case res.timedOut:
 		stderr = appendNote(stderr, fmt.Sprintf("nexops-agent: job timed out after %s and was killed", timeout))
-	} else if res.startErr != nil {
+	case res.startErr != nil:
 		stderr = appendNote(stderr, "nexops-agent: "+res.startErr.Error())
+	}
+	// A killed process has no meaningful exit code.
+	exitCode := intPtr(res.exitCode)
+	if res.cancelled {
+		exitCode = nil
 	}
 	finished := time.Now().UTC()
 	return protocol.JobResultRequest{
 		Status:     status,
-		ExitCode:   intPtr(res.exitCode),
+		ExitCode:   exitCode,
 		StdoutTail: strPtr(res.stdout),
 		StderrTail: strPtr(stderr),
 		StartedAt:  strPtr(started.Format(time.RFC3339)),
@@ -165,16 +177,17 @@ func aptSubForJob(jobType string) (apt.Sub, error) {
 
 // execResult is the raw outcome of running a command.
 type execResult struct {
-	exitCode int
-	stdout   string
-	stderr   string
-	timedOut bool
-	err      error // non-nil when the process exited non-zero / was killed
-	startErr error // non-nil when the binary could not be started
+	exitCode  int
+	stdout    string
+	stderr    string
+	timedOut  bool
+	cancelled bool
+	err       error // non-nil when the process exited non-zero / was killed
+	startErr  error // non-nil when the binary could not be started
 }
 
-// exec runs the command with a hard timeout. On timeout the whole process
-// group is SIGKILLed.
+// exec runs the command with a hard timeout. On timeout or context
+// cancellation the whole process group is SIGKILLed.
 func (r *Runner) exec(ctx context.Context, spec cmdSpec, timeout time.Duration) execResult {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -201,6 +214,13 @@ func (r *Runner) exec(ctx context.Context, spec cmdSpec, timeout time.Duration) 
 		stdout:   stdout.String(),
 		stderr:   stderr.String(),
 		exitCode: -1,
+	}
+	// The parent context being cancelled (operator cancel / shutdown) is
+	// distinct from the per-job deadline firing; report them separately.
+	if errors.Is(cctx.Err(), context.Canceled) {
+		res.cancelled = true
+		res.err = runErr
+		return res
 	}
 	if errors.Is(cctx.Err(), context.DeadlineExceeded) {
 		res.timedOut = true

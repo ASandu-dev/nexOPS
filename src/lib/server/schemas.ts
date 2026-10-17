@@ -67,6 +67,7 @@ export const heartbeatSchema = z.object({
   agentVersion: z.string().min(1).max(64),
   services: z.array(serviceDtoSchema).max(256),
   pkgUpdates: pkgUpdatesSchema.nullable(),
+  activeJobIds: z.array(z.string().min(1).max(64)).optional(),
 });
 
 export type HeartbeatPayload = z.infer<typeof heartbeatSchema>;
@@ -84,11 +85,11 @@ export const enrolSchema = z.object({
 });
 
 /**
- * Mirrors `JobResultRequest`, widened with TIMED_OUT: the agent reports it
- * after killing a process group on timeout (ARCHITECTURE.md §3).
+ * Mirrors `JobResultRequest`, widened with TIMED_OUT and CANCELLED: the agent
+ * reports it after killing a process group on timeout/cancel (ARCHITECTURE.md §3).
  */
 export const jobResultSchema = z.object({
-  status: z.enum(["SUCCEEDED", "FAILED", "TIMED_OUT"]),
+  status: z.enum(["SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED"]),
   exitCode: z.number().int().min(-256).max(65535).nullable(),
   stdoutTail: z.string().nullable(),
   stderrTail: z.string().nullable(),

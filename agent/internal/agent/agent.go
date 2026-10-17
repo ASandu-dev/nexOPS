@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/nexops/agent/internal/config"
@@ -27,6 +28,13 @@ const (
 	resultPostTimeout = 15 * time.Second
 )
 
+// jobRunner executes a single job and returns its wire result. *jobs.Runner is
+// the production implementation; tests inject a fake so the loop can be driven
+// without spawning real processes.
+type jobRunner interface {
+	Run(ctx context.Context, job protocol.Job) protocol.JobResultRequest
+}
+
 // Options wires the agent's dependencies (all injectable for tests).
 type Options struct {
 	Version   string
@@ -34,7 +42,7 @@ type Options struct {
 	State     *config.State
 	Client    *protocol.Client
 	Collector *metrics.Collector
-	Runner    *jobs.Runner
+	Runner    jobRunner
 	Logger    *log.Logger
 }
 
@@ -76,10 +84,6 @@ func Run(ctx context.Context, o Options) error {
 	a := &loop{opts: o, interval: interval}
 	return a.run(ctx)
 }
-
-// errReEnrolled signals that a rejected credential was replaced and the loop
-// should poll again immediately instead of backing off.
-var errReEnrolled = errors.New("credential re-enrolled")
 
 // fatalError wraps an unrecoverable condition (e.g. credential rejected and
 // no ENROL_TOKEN to re-enrol with). The loop propagates it so the process
@@ -124,119 +128,137 @@ func heartbeatInterval(o Options) time.Duration {
 type loop struct {
 	opts     Options
 	interval time.Duration
+
+	// stateMu guards opts.State. The heartbeat loop writes it on re-enrolment
+	// while the worker goroutine reads the credential to report results.
+	stateMu sync.Mutex
 }
 
 func (a *loop) run(ctx context.Context) error {
+	a.opts.Logger.Printf("agent loop starting; heartbeat every %s", a.interval)
+
+	// runCtx is cancelled when the loop returns for any reason (shutdown or a
+	// fatal error) so the worker's running job is killed and its result is
+	// still reported before Run returns.
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+
+	q := newJobQueue()
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		a.worker(runCtx, q)
+	}()
+	defer func() {
+		cancelRun()
+		<-workerDone
+	}()
+
+	ticker := time.NewTicker(a.interval)
+	defer ticker.Stop()
+
 	attempt := 0
 	for {
-		_, err := a.poll(ctx)
-		switch {
-		case err == nil:
-			attempt = 0
-			if sleepCtx(ctx, a.interval) != nil {
-				return nil // shutdown
-			}
-		case errors.Is(err, errReEnrolled):
-			// Fresh credential: poll again immediately with the
-			// (possibly updated) enrolment interval.
-			a.opts.Logger.Printf("re-enrolled; resuming heartbeats as agent %s (target %s)",
-				a.opts.State.AgentID, a.opts.State.TargetID)
-			a.interval = heartbeatInterval(a.opts)
-			attempt = 0
-		case ctx.Err() != nil:
-			// Shutting down mid-poll: the result of any running job was
-			// already attempted; stop cleanly.
+		select {
+		case <-ctx.Done():
 			return nil
-		default:
-			var fatal fatalError
-			if errors.As(err, &fatal) {
-				return err
-			}
-			a.opts.Logger.Printf("heartbeat failed (attempt %d): %v", attempt+1, err)
-			if sleepBackoff(ctx, attempt) != nil {
+		case <-ticker.C:
+			hb := a.opts.Collector.Collect(ctx)
+			if ctx.Err() != nil {
 				return nil
 			}
-			attempt++
+			hb.AgentVersion = a.opts.Version
+			hb.ActiveJobIds = q.activeIDs()
+
+			resp, err := a.opts.Client.Heartbeat(ctx, a.credential(), hb)
+			if err != nil {
+				if protocol.IsAuthError(err) {
+					if a.opts.Config.EnrolToken == "" {
+						return fatalError{fmt.Errorf("credential rejected by control plane; re-enrol required — re-run the install command from the target's enrolment page (ENROL_TOKEN missing from %s)", a.opts.Config.EnvPath)}
+					}
+					a.opts.Logger.Printf("credential rejected by control plane (%v); clearing it and re-enrolling", err)
+					if rerr := a.reEnrol(ctx); rerr != nil {
+						return rerr
+					}
+					a.interval = heartbeatInterval(a.opts)
+					ticker.Reset(a.interval)
+					attempt = 0
+					continue
+				}
+				var fatal fatalError
+				if errors.As(err, &fatal) {
+					return err
+				}
+				a.opts.Logger.Printf("heartbeat failed (attempt %d): %v", attempt+1, err)
+				if sleepBackoff(ctx, attempt) != nil {
+					return nil
+				}
+				attempt++
+				continue
+			}
+			attempt = 0
+
+			// Cancel instructions first: a job cancelled between dispatch and
+			// this heartbeat must never be started.
+			for _, id := range resp.CancelledJobIds {
+				if q.cancel(id) {
+					a.opts.Logger.Printf("job %s cancelled by operator", id)
+				}
+			}
+			for _, job := range resp.Jobs {
+				if job.IsTerminal() {
+					a.opts.Logger.Printf("skipping job %s: already %s", job.ID, job.Status)
+					continue
+				}
+				q.enqueue(job)
+			}
 		}
 	}
 }
 
-// poll performs one full heartbeat cycle: collect telemetry, POST it, run
-// every dispatched job sequentially, report each result.
-func (a *loop) poll(ctx context.Context) (int, error) {
-	hb := a.opts.Collector.Collect(ctx)
-	if ctx.Err() != nil {
-		return 0, ctx.Err()
-	}
-	hb.AgentVersion = a.opts.Version
-
-	resp, err := a.opts.Client.Heartbeat(ctx, a.opts.State.Credential, hb)
-	if err != nil {
-		if protocol.IsAuthError(err) {
-			if a.opts.Config.EnrolToken == "" {
-				return 0, fatalError{fmt.Errorf("credential rejected by control plane; re-enrol required — re-run the install command from the target's enrolment page (ENROL_TOKEN missing from %s)", a.opts.Config.EnvPath)}
-			}
-			a.opts.Logger.Printf("credential rejected by control plane (%v); clearing it and re-enrolling", err)
-			if rerr := a.reEnrol(ctx); rerr != nil {
-				return 0, rerr
-			}
-			return 0, errReEnrolled
-		}
-		return 0, err
-	}
-
-	ran := 0
-	for _, job := range resp.Jobs {
-		if ctx.Err() != nil {
-			return ran, ctx.Err()
-		}
-		if job.IsTerminal() {
-			// Cancelled between dispatch and receipt; the server already
-			// knows — nothing to execute or report.
-			a.opts.Logger.Printf("skipping job %s: already %s", job.ID, job.Status)
-			continue
+// worker consumes accepted jobs strictly sequentially. It runs on its own
+// goroutine so the heartbeat loop keeps beating — and can deliver cancels —
+// while a long job executes.
+func (a *loop) worker(ctx context.Context, q *jobQueue) {
+	for {
+		job, jctx, ok := q.next(ctx)
+		if !ok {
+			return
 		}
 		a.opts.Logger.Printf("job %s (%s) starting", job.ID, job.Type)
-		result := a.opts.Runner.Run(ctx, job)
-		a.opts.Logger.Printf("job %s finished: %s", job.ID, result.Status)
+		result := a.opts.Runner.Run(jctx, job)
+		q.markDone(job.ID)
 		if err := a.reportResult(ctx, job.ID, result); err != nil {
-			// Do not proceed to the next job with an unreported terminal
-			// state: the control plane would keep the job RUNNING and might
-			// dispatch more while this one's outcome is lost.
-			return ran, fmt.Errorf("report result for job %s: %w", job.ID, err)
+			a.opts.Logger.Printf("report result for job %s failed: %v", job.ID, err)
 		}
-		ran++
 	}
-	return ran, nil
+}
+
+// credential returns the current bearer credential under stateMu.
+func (a *loop) credential() string {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	return a.opts.State.Credential
 }
 
 // reportResult retries until the control plane accepts the result, so a
 // transient 5xx cannot lose a job's terminal state. During shutdown exactly
 // one attempt is made (with a fresh context so the cancelled parent does not
-// abort the POST). If the credential is rejected mid-flight the agent
-// re-enrols once and retries; without an ENROL_TOKEN the result is dropped —
-// losing one result is recoverable (the control plane times out stalled
-// jobs), retrying forever with a revoked credential is not.
+// abort the POST). A rejected credential is not re-enrolled here: the
+// heartbeat loop owns re-enrolment, and racing it would consume the
+// single-use token twice. Losing one result is recoverable — the control
+// plane times out stalled jobs.
 func (a *loop) reportResult(ctx context.Context, jobID string, result protocol.JobResultRequest) error {
-	reEnrolled := false
 	for attempt := 0; ; attempt++ {
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resultPostTimeout)
-		err := a.opts.Client.JobResult(rctx, a.opts.State.Credential, jobID, result)
+		err := a.opts.Client.JobResult(rctx, a.credential(), jobID, result)
 		cancel()
 		if err == nil {
 			return nil
 		}
 		if protocol.IsAuthError(err) {
-			if reEnrolled || a.opts.Config.EnrolToken == "" {
-				a.opts.Logger.Printf("result for job %s dropped: credential rejected by control plane and no re-enrol possible (%v)", jobID, err)
-				return nil
-			}
-			a.opts.Logger.Printf("result post for job %s rejected (auth); re-enrolling and retrying once", jobID)
-			if rerr := a.reEnrol(ctx); rerr != nil {
-				return rerr
-			}
-			reEnrolled = true
-			continue
+			a.opts.Logger.Printf("result for job %s dropped: credential rejected by control plane (%v)", jobID, err)
+			return nil
 		}
 		if ctx.Err() != nil {
 			// Already used our one shutdown attempt.
@@ -250,19 +272,19 @@ func (a *loop) reportResult(ctx context.Context, jobID string, result protocol.J
 	}
 }
 
-// reEnrol clears the rejected credential (memory + state.json) and enrols
-// again with the configured ENROL_TOKEN. Only called from the main loop —
-// poll and reportResult run sequentially — so it can never race the job
-// runner. key.pem is kept.
+// reEnrol clears the rejected credential and enrols again. It is only called
+// from the heartbeat loop; stateMu serialises the State write against the
+// worker's credential reads.
 func (a *loop) reEnrol(ctx context.Context) error {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
 	a.opts.State.Credential = ""
 	if err := config.SaveState(a.opts.Config.StateDir, *a.opts.State); err != nil {
-		return fmt.Errorf("clear rejected credential from state: %w", err)
+		return fmt.Errorf("clear stored credential: %w", err)
 	}
 	return enrolWithBackoff(ctx, a.opts)
 }
 
-// sleepCtx waits for d or until ctx is cancelled.
 func sleepCtx(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
 	defer t.Stop()

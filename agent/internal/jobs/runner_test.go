@@ -195,6 +195,50 @@ func TestRunnerTimeoutKillsCommand(t *testing.T) {
 	}
 }
 
+// TestRunnerCancelKillsCommand cancels the context of a long-running command
+// and asserts the process group is killed promptly and the wire result is
+// CANCELLED with the operator-facing note.
+func TestRunnerCancelKillsCommand(t *testing.T) {
+	if !hasSh() {
+		t.Skip("sh not available")
+	}
+	r := NewRunner()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	start := time.Now()
+	done := make(chan execResult, 1)
+	go func() {
+		done <- r.exec(ctx, cmdSpec{name: "sh", args: []string{"-c", "sleep 30"}}, 60*time.Second)
+	}()
+
+	// Let the child start, then cancel as an operator would.
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	select {
+	case res := <-done:
+		if !res.cancelled {
+			t.Fatalf("expected cancelled, got %+v", res)
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Fatalf("cancel took %s; process group not killed", elapsed)
+		}
+		result := resultFrom(res, 60*time.Second, start)
+		if result.Status != protocol.ResultCancelled {
+			t.Fatalf("status = %s, want CANCELLED", result.Status)
+		}
+		if result.ExitCode != nil {
+			t.Fatalf("exitCode = %v, want null", *result.ExitCode)
+		}
+		if result.StderrTail == nil || !strings.Contains(*result.StderrTail, "cancelled by operator") {
+			t.Fatalf("stderr = %v", result.StderrTail)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("exec did not return after cancel")
+	}
+}
+
 // TestResultFromMapsTimeoutToTimedOut pins the wire mapping (backend accepts
 // SUCCEEDED | FAILED | TIMED_OUT).
 func TestResultFromMapsTimeoutToTimedOut(t *testing.T) {

@@ -150,22 +150,49 @@ in `src/lib/types.ts`):
   "hostname": "vm-01",
   "agentVersion": "0.1.0",
   "services": [{ "name": "nginx", "state": "active" }],
-  "pkgUpdates": { "availableCount": 3, "rebootRequired": false }
+  "pkgUpdates": { "availableCount": 3, "rebootRequired": false },
+  "activeJobIds": ["job_01H..."]
 }
 ```
 
 `memAvailableBytes` **must** come from Linux `/proc/meminfo` `MemAvailable`
 (not `MemFree`). `pkgUpdates` is `null` when not measured.
 
+`activeJobIds` (optional) lists the jobs the agent is currently running **or**
+has accepted but not yet finished. The agent keeps heartbeating on its ticker
+while a long job executes, so this is how the control plane learns which jobs
+are still live on the host.
+
 Server side: persists a `TelemetrySnapshot`, sets `Target.lastTelemetryAt` and
 `lastHeartbeatAt`, promotes `PENDING_ENROLMENT → ONLINE` on the first valid
 heartbeat, and returns pending jobs to run inline:
 
 ```json
-{ "jobs": [ /* JobDto[] */ ] }
+{
+  "jobs": [ /* JobDto[] */ ],
+  "cancelledJobIds": ["job_01H..."]
+}
 ```
 
-Jobs dispatched this way move to `DISPATCHED`.
+Jobs dispatched this way move to `DISPATCHED`. `cancelledJobIds` (optional) is
+the intersection of the request's `activeJobIds` with jobs that are now
+`CANCELLED`; the server computes it statelessly on every beat. The agent
+cancels the matching running job (killing its process group) and drops any
+matching queued-but-unstarted job without executing it. Both fields are
+optional and backward-compatible: an older agent omits `activeJobIds` and
+ignores `cancelledJobIds`; an older control plane omits `cancelledJobIds`.
+
+### Cancellation
+
+`POST /api/jobs/:id/cancel` moves a `QUEUED`, `DISPATCHED` or `RUNNING` job to
+`CANCELLED` immediately (audited as `job.cancel`) and returns the updated
+`JobDto`. Terminal jobs (`SUCCEEDED`/`FAILED`/`CANCELLED`/`TIMED_OUT`) are
+rejected with `409`. For a job already on a host, the control plane does not
+signal the agent directly — the next heartbeat carries the job in
+`activeJobIds` and the response returns it in `cancelledJobIds`. The agent then
+kills the process group and reports a `CANCELLED` result; because the job is
+already terminal, that result POST is an idempotent no-op (see below). A job
+cancelled between dispatch and the agent starting it is skipped entirely.
 
 ### `POST /api/agent/jobs/:id/result`
 
@@ -181,12 +208,15 @@ Jobs dispatched this way move to `DISPATCHED`.
 ```
 
 **Idempotent**: replaying a result for an already-terminal job is a no-op
-(`200`) and does not overwrite the first terminal state.
+(`200`) and does not overwrite the first terminal state. This is what makes a
+cancelled job safe: the operator's `CANCELLED` write wins, and the agent's
+later `CANCELLED` result (posted after it kills the process group) is ignored.
 
 **Execution policy.** Each job carries `timeoutSec` (default `600`). The agent
 kills the process group on timeout and reports `TIMED_OUT`; the control plane
 also transitions a job to `TIMED_OUT` if `startedAt + timeoutSec` elapses while
-still non-terminal.
+still non-terminal. The accepted result statuses are `SUCCEEDED`, `FAILED`,
+`TIMED_OUT` and `CANCELLED`.
 
 **Job types.** `JobType` is a closed enum; the agent hard-maps each type to an
 explicit argv vector (never a shell string). Apt maintenance runs through the

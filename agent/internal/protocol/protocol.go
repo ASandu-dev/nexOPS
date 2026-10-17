@@ -18,12 +18,13 @@ const (
 	JobServiceState = "SERVICE_STATUS"
 )
 
-// Job result statuses. The backend accepts all three; TIMED_OUT is reported
-// after the agent kills the process group on executionPolicy timeout.
+// Job result statuses. The backend accepts all four; TIMED_OUT/CANCELLED are
+// reported after the agent kills the process group on timeout/cancel.
 const (
 	ResultSucceeded = "SUCCEEDED"
 	ResultFailed    = "FAILED"
 	ResultTimedOut  = "TIMED_OUT"
+	ResultCancelled = "CANCELLED"
 )
 
 // DefaultJobTimeoutSec is applied when a job carries timeoutSec <= 0.
@@ -123,12 +124,14 @@ type HeartbeatRequest struct {
 	AgentVersion      string            `json:"agentVersion"`
 	Services          []ServiceState    `json:"services"`
 	PkgUpdates        *PkgUpdateSummary `json:"pkgUpdates"`
+	ActiveJobIds      []string          `json:"activeJobIds,omitempty"`
 }
 
 // HeartbeatResponse carries the jobs dispatched to this agent inline with the
 // poll response (the agent never listens on a port).
 type HeartbeatResponse struct {
-	Jobs []Job `json:"jobs"`
+	Jobs            []Job    `json:"jobs"`
+	CancelledJobIds []string `json:"cancelledJobIds,omitempty"`
 }
 
 // ExecutionPolicy is tolerated as an alternative shape for the job timeout.
