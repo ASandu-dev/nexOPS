@@ -29,7 +29,11 @@ build:
 
 # Build agent binaries locally into ./agent-dist using Docker
 agent:
-	docker build --target agent-builder --output type=local,dest=./agent-dist ./agent
+	docker build --target agent-builder -t nexops-agent-builder:local . \
+	&& rm -rf ./agent-dist && mkdir -p ./agent-dist \
+	&& cid=$$(docker create nexops-agent-builder:local) \
+	&& docker cp $$cid:/agent-dist/. ./agent-dist/; \
+	ec=$$?; docker rm -f $$cid >/dev/null; exit $$ec
 
 # Docker Compose operations
 up:
@@ -65,4 +69,5 @@ test-agent:
 clean:
 	rm -rf .next node_modules agent-dist
 	docker compose down -v
+	docker image rm -f nexops-agent-builder:local
 	docker image prune -f
