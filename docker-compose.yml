@@ -46,8 +46,10 @@ services:
     environment:
       DATABASE_URL: postgresql://nexops:${POSTGRES_PASSWORD}@postgres:5432/nexops?schema=public
       NODE_ENV: production
+      # PUBLIC_ORIGIN (e.g. https://nexops.example.com) overrides the localhost default when deployed behind a proxy.
+      NEXT_PUBLIC_APP_URL: ${PUBLIC_ORIGIN:-http://localhost:${APP_PORT:-3000}}
     ports:
-      - "3000:3000"
+      - "${APP_PORT:-3000}:3000"
     tmpfs:
       - /tmp
     healthcheck:

@@ -45,7 +45,7 @@ TELEMETRY_RETENTION_DAYS=30
 
 **Note:** PostgreSQL is bound to `127.0.0.1:5432` on the host. Do not expose port 5432 externally. Use a reverse proxy for TLS termination on port 443.
 
-**Critical:** `NEXT_PUBLIC_APP_URL` must be the **exact HTTPS URL** agents will use. Agent install commands are generated from this value.
+**Critical:** `NEXT_PUBLIC_APP_URL` is set by docker compose from `PUBLIC_ORIGIN` (or `http://localhost:$APP_PORT` when `PUBLIC_ORIGIN` is unset). Agent install commands are generated from this value.
 
 ### 1.3 TLS Termination (Reverse Proxy)
 
@@ -56,7 +56,7 @@ The control plane runs on HTTP port 3000 inside Docker. You **must** terminate T
 ```caddy
 # /etc/caddy/Caddyfile
 nexops.example.com {
-    reverse_proxy localhost:3000
+    reverse_proxy localhost:$APP_PORT
 }
 ```
 
@@ -87,7 +87,7 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/nexops.example.com/privkey.pem;
 
     location / {
-        proxy_pass http://localhost:3000;
+        proxy_pass http://localhost:$APP_PORT;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -302,7 +302,7 @@ Disk usage ≈ Total rows × 2 KB
 | `DATABASE_URL` | Yes | — | PostgreSQL connection string |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Yes | — | Clerk public key |
 | `CLERK_SECRET_KEY` | Yes | — | Clerk secret key (server only) |
-| `NEXT_PUBLIC_APP_URL` | Yes | — | Public HTTPS URL for agent install commands |
+| `NEXT_PUBLIC_APP_URL` | No | derived | Derived from `PUBLIC_ORIGIN` / `APP_PORT`; optional in local dev |
 | `AGENT_DIST_DIR` | No | `/app/agent-dist` | Internal path to agent binaries |
 | `TELEMETRY_RETENTION_DAYS` | No | `30` | Days to retain telemetry snapshots |
 | `PORT` | No | `3000` | HTTP port (internal) |

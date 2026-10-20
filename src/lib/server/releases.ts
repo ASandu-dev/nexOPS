@@ -14,6 +14,7 @@ const RELEASE_FILES = new Set([
 /**
  * Public base URL of the control plane: env-configured first, request origin
  * as fallback (dev servers without NEXT_PUBLIC_APP_URL).
+ * In Docker, compose derives NEXT_PUBLIC_APP_URL from APP_PORT/PUBLIC_ORIGIN.
  */
 export function resolveBaseUrl(request: Request): string {
   const fromEnv = process.env["NEXT_PUBLIC_APP_URL"];

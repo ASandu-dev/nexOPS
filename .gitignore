@@ -40,4 +40,7 @@ docker-compose.override.yml
 # tooling
 .opencode
 
+# EnvSitter dotenv tool state
+.envsitter/
+
 .clerk/

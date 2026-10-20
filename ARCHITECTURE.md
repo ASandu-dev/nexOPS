@@ -38,7 +38,7 @@ behind NAT/firewalls without opening inbound access.
 curl -fsSLO "$BASE/api/agent/releases/install.sh" && curl -fsSLO "$BASE/api/agent/releases/install.sh.sha256" && sha256sum -c install.sh.sha256 && sudo ENROL_TOKEN=<token> CONTROL_PLANE_URL=<BASE> OS=<ubuntu|debian> bash install.sh; rm -f install.sh install.sh.sha256
 ```
 
-`$BASE` is `NEXT_PUBLIC_APP_URL`. The script is fetched over TLS, its SHA-256 is
+`$BASE` is `NEXT_PUBLIC_APP_URL` (derived from `APP_PORT`/`PUBLIC_ORIGIN` by compose). The script is fetched over TLS, its SHA-256 is
 verified against the sibling `.sha256` file **before** execution, and the
 temporary files are removed afterwards.
 
