@@ -26,6 +26,9 @@ const OS_OPTIONS = [
   { value: "debian", label: "Debian" },
 ] as const;
 
+/** `URL.hostname` keeps the brackets for IPv6 literals, hence `[::1]`. */
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
+
 export interface EnrolDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -185,6 +188,19 @@ function EnrolCommandStep({
 
   const expired = remainingSec <= 0;
 
+  // Origin of the installer as the server built it: PUBLIC_ORIGIN when pinned,
+  // otherwise the origin the browser used to reach the app. Never parsed out of
+  // the shell command string.
+  const installerUrl = (() => {
+    if (!created.installerUrl) return null;
+    try {
+      return new URL(created.installerUrl);
+    } catch {
+      return null;
+    }
+  })();
+  const isLoopbackOrigin = installerUrl !== null && LOOPBACK_HOSTNAMES.has(installerUrl.hostname);
+
   const instructions = useMemo(
     () => [
       "Copy the command below and run it on the target as root (or with sudo).",
@@ -205,6 +221,16 @@ function EnrolCommandStep({
       </div>
 
       <CodeBlock label="Install command" code={created.installCommand} />
+
+      {isLoopbackOrigin && installerUrl ? (
+        <p role="status" className="text-sm text-on-surface-variant">
+          The installer is served from <code>{installerUrl.origin}</code>, so this command only runs
+          on the control-plane host itself. Set <code>PUBLIC_ORIGIN</code> in <code>.env</code> on
+          the server (e.g. <code>http://192.168.1.50:3211</code>) to pin the command to the
+          machine&apos;s LAN address so remote targets can enrol, then run{" "}
+          <code>docker compose up -d control-plane</code> to apply.
+        </p>
+      ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
         <span className="text-on-surface-variant">
