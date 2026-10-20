@@ -46,8 +46,9 @@ services:
     environment:
       DATABASE_URL: postgresql://nexops:${POSTGRES_PASSWORD}@postgres:5432/nexops?schema=public
       NODE_ENV: production
-      # PUBLIC_ORIGIN (e.g. https://nexops.example.com) overrides the localhost default when deployed behind a proxy.
-      NEXT_PUBLIC_APP_URL: ${PUBLIC_ORIGIN:-http://localhost:${APP_PORT:-3000}}
+      # PUBLIC_ORIGIN (e.g. http://192.168.1.50:3211 or https://nexops.example.com) pins the origin used in agent install commands.
+      # Unset = the control plane uses the origin the browser/request used (so the enrol command follows whatever address you opened the dashboard on).
+      NEXT_PUBLIC_APP_URL: ${PUBLIC_ORIGIN:-}
     ports:
       - "${APP_PORT:-3000}:3000"
     tmpfs:

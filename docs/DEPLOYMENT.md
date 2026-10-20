@@ -45,7 +45,7 @@ TELEMETRY_RETENTION_DAYS=30
 
 **Note:** PostgreSQL is bound to `127.0.0.1:5432` on the host. Do not expose port 5432 externally. Use a reverse proxy for TLS termination on port 443.
 
-**Critical:** `NEXT_PUBLIC_APP_URL` is set by docker compose from `PUBLIC_ORIGIN` (or `http://localhost:$APP_PORT` when `PUBLIC_ORIGIN` is unset). Agent install commands are generated from this value.
+**Critical:** `PUBLIC_ORIGIN` pins the origin used in agent install commands (e.g. `https://nexops.example.com` or `http://192.168.1.50:3211`). Leave empty to use the origin the browser/request used. In production behind a reverse proxy, **you must set `PUBLIC_ORIGIN`** so commands don't echo an internal address. Docker compose passes it through as `NEXT_PUBLIC_APP_URL`.
 
 ### 1.3 TLS Termination (Reverse Proxy)
 
@@ -302,7 +302,8 @@ Disk usage ≈ Total rows × 2 KB
 | `DATABASE_URL` | Yes | — | PostgreSQL connection string |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Yes | — | Clerk public key |
 | `CLERK_SECRET_KEY` | Yes | — | Clerk secret key (server only) |
-| `NEXT_PUBLIC_APP_URL` | No | derived | Derived from `PUBLIC_ORIGIN` / `APP_PORT`; optional in local dev |
+| `PUBLIC_ORIGIN` | No* | — | Pin the origin used in agent install commands (e.g. `https://nexops.example.com`, `http://192.168.1.50:3211`). **Required in production behind a proxy**. Leave empty to use the request origin. |
+| `NEXT_PUBLIC_APP_URL` | No | derived | Set by compose from `PUBLIC_ORIGIN`; do not set manually unless you must override. |
 | `AGENT_DIST_DIR` | No | `/app/agent-dist` | Internal path to agent binaries |
 | `TELEMETRY_RETENTION_DAYS` | No | `30` | Days to retain telemetry snapshots |
 | `PORT` | No | `3000` | HTTP port (internal) |

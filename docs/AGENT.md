@@ -37,7 +37,7 @@ curl -fsSLO "$BASE/api/agent/releases/install.sh" \
   && rm -f install.sh install.sh.sha256
 ```
 
-- `$BASE` = `NEXT_PUBLIC_APP_URL` (derived from `APP_PORT`/`PUBLIC_ORIGIN` by compose; must be HTTPS in production)
+- `$BASE` = `NEXT_PUBLIC_APP_URL` (pinned by `PUBLIC_ORIGIN` via compose; otherwise the request origin). Must be HTTPS in production.
 - `ENROL_TOKEN` = single-use, 15-minute expiry, returned once from `POST /api/targets`
 - `OS` = `ubuntu` or `debian` (determines package manager commands)
 
