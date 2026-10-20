@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 import { Menu, X } from "lucide-react";
 import { UserButton } from "@clerk/nextjs";
 import { SnackbarProvider } from "@/components/ui/snackbar";
-import { ThemeScript } from "./theme-script";
 import { ThemeToggle } from "./theme-toggle";
 import { SidebarBrand, SidebarNav } from "./sidebar-nav";
 
@@ -48,7 +47,6 @@ export function DashboardShell({ children }: { children: ReactNode }) {
 
   return (
     <SnackbarProvider>
-      <ThemeScript />
       <div className="min-h-dvh md:grid md:grid-cols-[16rem_1fr]">
         <aside className="hidden border-r border-outline-variant bg-surface-container md:flex md:flex-col md:gap-4 md:p-3">
           <SidebarBrand />

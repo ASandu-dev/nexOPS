@@ -4,11 +4,28 @@ import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
 
 const STORAGE_KEY = "nexops-theme";
+const COOKIE_KEY = "nexops-theme";
+
+function setCookie(name: string, value: string) {
+  try {
+    document.cookie = `${name}=${encodeURIComponent(value)}; Path=/; SameSite=Lax; Max-Age=31536000`;
+  } catch {
+    // Ignore cookie write failures
+  }
+}
+
+function setStorage(name: string, value: string) {
+  try {
+    localStorage.setItem(name, value);
+  } catch {
+    // Storage can be unavailable (private mode)
+  }
+}
 
 /**
  * Toggles the `dark` class on <html> and persists the choice. The initial value
- * is read from the DOM (set by ThemeScript) so the button never disagrees with
- * the rendered theme.
+ * is read from the DOM (set by bootstrap script) so the button never disagrees
+ * with the rendered theme.
  */
 export function ThemeToggle() {
   const [dark, setDark] = useState(false);
@@ -20,12 +37,10 @@ export function ThemeToggle() {
   function toggle() {
     const next = !dark;
     setDark(next);
+    const value = next ? "dark" : "light";
     document.documentElement.classList.toggle("dark", next);
-    try {
-      localStorage.setItem(STORAGE_KEY, next ? "dark" : "light");
-    } catch {
-      // Storage can be unavailable (private mode); the in-memory toggle still works.
-    }
+    setStorage(STORAGE_KEY, value);
+    setCookie(COOKIE_KEY, value);
   }
 
   return (
