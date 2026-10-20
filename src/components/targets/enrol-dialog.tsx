@@ -60,7 +60,9 @@ export function EnrolDialog({ open, onOpenChange, onCreated }: EnrolDialogProps)
     { refreshIntervalMs: 5000 },
   );
   const liveTarget = polledTarget ?? created?.target ?? null;
-  const enrolled = liveTarget !== null && liveTarget.status !== "PENDING_ENROLMENT";
+  // A first heartbeat is the only signal that the agent actually connected;
+  // status alone would also report ENROLMENT_FAILED (never connected) as success.
+  const connected = liveTarget !== null && liveTarget.lastHeartbeatAt !== null;
 
   async function submit() {
     const trimmedName = name.trim();
@@ -144,7 +146,7 @@ export function EnrolDialog({ open, onOpenChange, onCreated }: EnrolDialogProps)
           />
         </div>
       ) : created ? (
-        <EnrolCommandStep created={created} enrolled={enrolled} liveTarget={liveTarget} />
+        <EnrolCommandStep created={created} connected={connected} liveTarget={liveTarget} />
       ) : null}
 
       <DialogFooter>
@@ -167,11 +169,11 @@ export function EnrolDialog({ open, onOpenChange, onCreated }: EnrolDialogProps)
 
 function EnrolCommandStep({
   created,
-  enrolled,
+  connected,
   liveTarget,
 }: {
   created: CreateTargetResponseDto;
-  enrolled: boolean;
+  connected: boolean;
   liveTarget: TargetDto | null;
 }) {
   const [remainingSec, setRemainingSec] = useState(() => secondsUntil(created.expiresAt));
@@ -223,10 +225,10 @@ function EnrolCommandStep({
         </span>
       </div>
 
-      {enrolled ? (
+      {connected ? (
         <p className="flex items-center gap-2 rounded-md border border-success/40 bg-success-container px-3 py-2 text-sm text-on-success-container">
           <CheckCircle2 className="size-4 shrink-0" aria-hidden="true" />
-          Target enrolled successfully.
+          Target connected successfully.
         </p>
       ) : null}
 

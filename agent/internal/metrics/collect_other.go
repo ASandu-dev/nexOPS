@@ -30,3 +30,7 @@ func (c *Collector) collect(ctx context.Context) protocol.HeartbeatRequest {
 	hb.CapturedAt = time.Now().UTC().Format(time.RFC3339)
 	return hb
 }
+
+// measurePkgUpdates is the non-linux stub: package state is unavailable, so
+// the background refresher stores nil and Collect reports pkgUpdates null.
+func measurePkgUpdates(context.Context) *protocol.PkgUpdateSummary { return nil }

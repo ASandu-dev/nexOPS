@@ -34,9 +34,25 @@ interface BucketRow {
 }
 
 /**
- * Persists one heartbeat: telemetry snapshot + liveness columns on the target,
- * and the agent's reported version. Callers have already authenticated the
- * bearer credential; this function assumes a valid, non-revoked identity.
+ * A heartbeat proves connectivity; it only carries telemetry when the agent
+ * actually sampled the host. `memTotalBytes` is the host's total RAM, so a
+ * running Linux host always reports > 0 — 0 means collection failed or was
+ * abandoned (e.g. the agent's collection deadline). Non-Linux dev builds
+ * report 0, as do Linux agents that cannot read `/proc/meminfo`.
+ */
+export function hasUsableTelemetry(payload: HeartbeatPayload): boolean {
+  return payload.memTotalBytes > 0;
+}
+
+/**
+ * Persists one heartbeat: telemetry snapshot (only when the beat carried a real
+ * sample) + liveness columns on the target, and the agent's reported version.
+ * Callers have already authenticated the bearer credential; this function
+ * assumes a valid, non-revoked identity.
+ *
+ * Connectivity and telemetry freshness are deliberately independent: advancing
+ * `lastTelemetryAt` on a sample-less beat would make telemetry look as fresh as
+ * the connection and render the read-time DEGRADED state unreachable.
  *
  * @returns whether this was the target's first-ever heartbeat
  */
@@ -48,6 +64,7 @@ export async function recordHeartbeat(args: {
   const { identity, target, payload } = args;
   const now = new Date();
   const firstHeartbeat = target.lastHeartbeatAt === null;
+  const usableTelemetry = hasUsableTelemetry(payload);
 
   const hasDisks = payload.disks.length > 0;
   const hasNet = payload.net.length > 0;
@@ -57,32 +74,42 @@ export async function recordHeartbeat(args: {
   const netTxRateBps = payload.net.reduce((sum, n) => sum + n.txRateBps, 0);
 
   await prisma.$transaction([
-    prisma.telemetrySnapshot.create({
-      data: {
-        targetId: target.id,
-        capturedAt: new Date(payload.capturedAt),
-        cpuPct: payload.cpuPct,
-        load1: payload.load1,
-        load5: payload.load5,
-        load15: payload.load15,
-        memTotalBytes: BigInt(Math.round(payload.memTotalBytes)),
-        memUsedBytes: BigInt(Math.round(payload.memUsedBytes)),
-        memAvailableBytes: BigInt(Math.round(payload.memAvailableBytes)),
-        swapUsedBytes:
-          payload.swapUsedBytes === null ? null : BigInt(Math.round(payload.swapUsedBytes)),
-        diskUsedBytes: hasDisks ? BigInt(Math.round(diskUsedBytes)) : null,
-        diskTotalBytes: hasDisks ? BigInt(Math.round(diskTotalBytes)) : null,
-        netRxRateBps: hasNet ? netRxRateBps : null,
-        netTxRateBps: hasNet ? netTxRateBps : null,
-        uptimeSec: payload.uptimeSec === null ? null : BigInt(Math.round(payload.uptimeSec)),
-        raw: payload as unknown as Prisma.InputJsonValue,
-      },
-    }),
+    // Skip the snapshot entirely when collection failed. A zeroed row would
+    // become the "latest snapshot" for the target and poison the fleet
+    // aggregates, LOW_DISK warnings and summary UI that read from it.
+    ...(usableTelemetry
+      ? [
+          prisma.telemetrySnapshot.create({
+            data: {
+              targetId: target.id,
+              capturedAt: new Date(payload.capturedAt),
+              cpuPct: payload.cpuPct,
+              load1: payload.load1,
+              load5: payload.load5,
+              load15: payload.load15,
+              memTotalBytes: BigInt(Math.round(payload.memTotalBytes)),
+              memUsedBytes: BigInt(Math.round(payload.memUsedBytes)),
+              memAvailableBytes: BigInt(Math.round(payload.memAvailableBytes)),
+              swapUsedBytes:
+                payload.swapUsedBytes === null ? null : BigInt(Math.round(payload.swapUsedBytes)),
+              diskUsedBytes: hasDisks ? BigInt(Math.round(diskUsedBytes)) : null,
+              diskTotalBytes: hasDisks ? BigInt(Math.round(diskTotalBytes)) : null,
+              netRxRateBps: hasNet ? netRxRateBps : null,
+              netTxRateBps: hasNet ? netTxRateBps : null,
+              uptimeSec: payload.uptimeSec === null ? null : BigInt(Math.round(payload.uptimeSec)),
+              raw: payload as unknown as Prisma.InputJsonValue,
+            },
+          }),
+        ]
+      : []),
     prisma.target.update({
       where: { id: target.id },
       data: {
+        // Connectivity always advances; telemetry freshness only moves when the
+        // beat carried a real sample.
         lastHeartbeatAt: now,
-        lastTelemetryAt: now,
+        ...(usableTelemetry ? { lastTelemetryAt: now } : {}),
+        // Hostname is identity, not telemetry: keep it current even without a sample.
         hostname: payload.hostname,
         // Stored liveness becomes ONLINE; MAINTENANCE/DEGRADED/OFFLINE are derived at read time.
         ...(target.status !== "ONLINE" ? { status: "ONLINE" as const } : {}),

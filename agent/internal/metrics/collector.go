@@ -18,6 +18,10 @@ const cpuSampleWindow = 400 * time.Millisecond
 // change minute-to-minute.
 const pkgCacheTTL = 10 * time.Minute
 
+// pkgMeasureTimeout bounds a single background measurement so a SIGTERM aborts
+// an in-flight apt run instead of leaving the refresher wedged at shutdown.
+const pkgMeasureTimeout = 2 * time.Minute
+
 // pkgCache memoises the last package-update measurement. A nil val with a
 // recent timestamp means "measured as unavailable" (cached too, so a host
 // without apt is not probed on every heartbeat).
@@ -36,11 +40,76 @@ type Collector struct {
 
 	pkgMu sync.Mutex
 	pkg   *pkgCache
+
+	// Injectables with safe production defaults (see NewCollector). measurePkg
+	// is swapped by tests to avoid invoking apt; pkgTTL lets tests drive cache
+	// expiry without waiting ten minutes.
+	measurePkg func(context.Context) *protocol.PkgUpdateSummary
+	pkgTTL     time.Duration
+	startOnce  sync.Once
 }
 
 // NewCollector creates a Collector watching the given systemd units.
 func NewCollector(watchedServices []string) *Collector {
-	return &Collector{watched: watchedServices}
+	return &Collector{
+		watched:    watchedServices,
+		measurePkg: measurePkgUpdates,
+		pkgTTL:     pkgCacheTTL,
+	}
+}
+
+// Start launches the single background package-update refresher. It measures
+// immediately, then re-measures on the TTL cadence, and stops when ctx is
+// cancelled. Start is idempotent: repeated calls never launch a second
+// goroutine, because two refreshers would run two apt simulations
+// concurrently and double the host's load.
+func (c *Collector) Start(ctx context.Context) {
+	c.startOnce.Do(func() {
+		go c.refreshPkgLoop(ctx)
+	})
+}
+
+// refreshPkgLoop is the only writer of the package cache. Doing the measurement
+// here, off the heartbeat path, keeps a multi-second apt simulation from
+// delaying a beat. The single goroutine also guarantees refresh attempts never
+// overlap: a measurement is always finished before the next timer is armed.
+func (c *Collector) refreshPkgLoop(ctx context.Context) {
+	for {
+		c.refreshPkg(ctx)
+
+		t := time.NewTimer(c.pkgTTL)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// refreshPkg measures once and stores the result. The mutex serialises the
+// cache write against Collect's read.
+func (c *Collector) refreshPkg(ctx context.Context) {
+	mctx, cancel := context.WithTimeout(ctx, pkgMeasureTimeout)
+	val := c.measurePkg(mctx)
+	cancel()
+
+	c.pkgMu.Lock()
+	c.pkg = &pkgCache{at: time.Now(), val: val}
+	c.pkgMu.Unlock()
+}
+
+// collectPkgUpdates reads the cache without ever measuring. It returns nil when
+// nothing was measured within the TTL; on the wire `pkgUpdates == null` means
+// "not measured within the last TTL", which is the honest contract for a value
+// refreshed in the background at most once per TTL.
+func (c *Collector) collectPkgUpdates() *protocol.PkgUpdateSummary {
+	c.pkgMu.Lock()
+	defer c.pkgMu.Unlock()
+	if c.pkg == nil || time.Since(c.pkg.at) >= c.pkgTTL {
+		return nil
+	}
+	return c.pkg.val
 }
 
 // Collect samples the host and returns a HeartbeatRequest ready to POST.

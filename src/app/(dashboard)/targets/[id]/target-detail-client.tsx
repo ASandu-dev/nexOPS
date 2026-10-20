@@ -37,13 +37,17 @@ export function TargetDetailClient({ id }: { id: string }) {
   const [fixOpen, setFixOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const { data: target, error, loading, refresh } = useApi<TargetDetailDto>(`/api/targets/${id}`);
+  const { data: target, error, loading, refresh } = useApi<TargetDetailDto>(`/api/targets/${id}`, {
+    refreshIntervalMs: 15000,
+  });
   const {
     data: series,
     error: seriesError,
     loading: seriesLoading,
     refresh: refreshSeries,
-  } = useApi<TelemetrySeriesDto>(`/api/targets/${id}/telemetry?range=${range}`);
+  } = useApi<TelemetrySeriesDto>(`/api/targets/${id}/telemetry?range=${range}`, {
+    refreshIntervalMs: 30000,
+  });
 
   async function queueJob(type: JobDto["type"]) {
     await apiFetch<JobDto>("/api/jobs", { method: "POST", body: { targetId: id, type } });

@@ -156,7 +156,19 @@ in `src/lib/types.ts`):
 ```
 
 `memAvailableBytes` **must** come from Linux `/proc/meminfo` `MemAvailable`
-(not `MemFree`). `pkgUpdates` is `null` when not measured.
+(not `MemFree`).
+
+The agent heartbeats **immediately on start**, before the first interval, so a
+freshly enrolled target reaches `ONLINE` without waiting a full tick.
+Collection is bounded (~10s); if a collector wedges, the beat proceeds with
+partial data and missing metrics are sent as `null` rather than delaying the
+beat past the 90s liveness window. `pkgUpdates` is refreshed in the background
+at most once per 10 minutes, so it may be `null` on a given beat — `null`
+honestly means "not measured within the last TTL".
+
+`lastTelemetryAt` only advances for heartbeats carrying usable telemetry
+(`memTotalBytes > 0`, which the agent reports only when it actually sampled
+`/proc/meminfo`); a heartbeat without usable telemetry is connectivity-only.
 
 `activeJobIds` (optional) lists the jobs the agent is currently running **or**
 has accepted but not yet finished. The agent keeps heartbeating on its ticker
@@ -250,6 +262,10 @@ a display overlay.
 
 `MAINTENANCE` is computed at read time and takes precedence over the stored
 status for display only. Freshness thresholds are fixed constants for now.
+
+Connectivity (`lastHeartbeatAt`) and telemetry freshness (`lastTelemetryAt`)
+are independent, so a connected target whose collection keeps failing is
+`DEGRADED` with a `NO_TELEMETRY` warning rather than `ONLINE`.
 
 ---
 

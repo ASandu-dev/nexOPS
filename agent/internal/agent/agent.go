@@ -26,6 +26,11 @@ const (
 	backoffCap  = 5 * time.Minute
 	// resultPostTimeout bounds a single result submission attempt.
 	resultPostTimeout = 15 * time.Second
+	// collectTimeout bounds telemetry collection on the beat path. A wedged
+	// collector (e.g. apt/systemctl hanging) must not push the beat past the
+	// 90s liveness window and get a healthy target reported OFFLINE; partial
+	// telemetry is preferable to that, and to delaying cancel instructions.
+	collectTimeout = 10 * time.Second
 )
 
 // jobRunner executes a single job and returns its wire result. *jobs.Runner is
@@ -154,65 +159,78 @@ func (a *loop) run(ctx context.Context) error {
 		<-workerDone
 	}()
 
-	ticker := time.NewTicker(a.interval)
-	defer ticker.Stop()
+	// Package updates are refreshed off the beat path; the refresher is scoped
+	// to runCtx so an in-flight apt simulation is aborted on shutdown.
+	a.opts.Collector.Start(runCtx)
+
+	// A freshly enrolled target must not wait a whole interval before its
+	// first beat: that beat is what promotes PENDING_ENROLMENT to ONLINE, and
+	// it carries the first telemetry snapshot. Prime the timer to fire
+	// immediately, then re-arm it per iteration below.
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 
 	attempt := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
-			hb := a.opts.Collector.Collect(ctx)
-			if ctx.Err() != nil {
-				return nil
-			}
-			hb.AgentVersion = a.opts.Version
-			hb.ActiveJobIds = q.activeIDs()
+		case <-timer.C:
+		}
 
-			resp, err := a.opts.Client.Heartbeat(ctx, a.credential(), hb)
-			if err != nil {
-				if protocol.IsAuthError(err) {
-					if a.opts.Config.EnrolToken == "" {
-						return fatalError{fmt.Errorf("credential rejected by control plane; re-enrol required — re-run the install command from the target's enrolment page (ENROL_TOKEN missing from %s)", a.opts.Config.EnvPath)}
-					}
-					a.opts.Logger.Printf("credential rejected by control plane (%v); clearing it and re-enrolling", err)
-					if rerr := a.reEnrol(ctx); rerr != nil {
-						return rerr
-					}
-					a.interval = heartbeatInterval(a.opts)
-					ticker.Reset(a.interval)
-					attempt = 0
-					continue
+		cctx, cancelCollect := context.WithTimeout(ctx, collectTimeout)
+		hb := a.opts.Collector.Collect(cctx)
+		cancelCollect()
+		if ctx.Err() != nil {
+			return nil
+		}
+		hb.AgentVersion = a.opts.Version
+		hb.ActiveJobIds = q.activeIDs()
+
+		resp, err := a.opts.Client.Heartbeat(ctx, a.credential(), hb)
+		if err != nil {
+			if protocol.IsAuthError(err) {
+				if a.opts.Config.EnrolToken == "" {
+					return fatalError{fmt.Errorf("credential rejected by control plane; re-enrol required — re-run the install command from the target's enrolment page (ENROL_TOKEN missing from %s)", a.opts.Config.EnvPath)}
 				}
-				var fatal fatalError
-				if errors.As(err, &fatal) {
-					return err
+				a.opts.Logger.Printf("credential rejected by control plane (%v); clearing it and re-enrolling", err)
+				if rerr := a.reEnrol(ctx); rerr != nil {
+					return rerr
 				}
-				a.opts.Logger.Printf("heartbeat failed (attempt %d): %v", attempt+1, err)
-				if sleepBackoff(ctx, attempt) != nil {
-					return nil
-				}
-				attempt++
+				a.interval = heartbeatInterval(a.opts)
+				timer.Reset(a.interval)
+				attempt = 0
 				continue
 			}
-			attempt = 0
-
-			// Cancel instructions first: a job cancelled between dispatch and
-			// this heartbeat must never be started.
-			for _, id := range resp.CancelledJobIds {
-				if q.cancel(id) {
-					a.opts.Logger.Printf("job %s cancelled by operator", id)
-				}
+			var fatal fatalError
+			if errors.As(err, &fatal) {
+				return err
 			}
-			for _, job := range resp.Jobs {
-				if job.IsTerminal() {
-					a.opts.Logger.Printf("skipping job %s: already %s", job.ID, job.Status)
-					continue
-				}
-				q.enqueue(job)
+			a.opts.Logger.Printf("heartbeat failed (attempt %d): %v", attempt+1, err)
+			// Re-arm on the backoff delay instead of sleeping: the select above
+			// still honours shutdown while the retry is pending.
+			delay := backoffDelay(attempt)
+			attempt++
+			timer.Reset(delay)
+			continue
+		}
+		attempt = 0
+
+		// Cancel instructions first: a job cancelled between dispatch and
+		// this heartbeat must never be started.
+		for _, id := range resp.CancelledJobIds {
+			if q.cancel(id) {
+				a.opts.Logger.Printf("job %s cancelled by operator", id)
 			}
 		}
+		for _, job := range resp.Jobs {
+			if job.IsTerminal() {
+				a.opts.Logger.Printf("skipping job %s: already %s", job.ID, job.Status)
+				continue
+			}
+			q.enqueue(job)
+		}
+		timer.Reset(a.interval)
 	}
 }
 
@@ -296,11 +314,17 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// sleepBackoff waits min(base*2^attempt, cap), aborting on ctx cancellation.
-func sleepBackoff(ctx context.Context, attempt int) error {
+// backoffDelay returns min(backoffBase*2^attempt, backoffCap). A shifted value
+// that overflows to non-positive is clamped to the cap.
+func backoffDelay(attempt int) time.Duration {
 	d := backoffBase << attempt
 	if d <= 0 || d > backoffCap {
 		d = backoffCap
 	}
-	return sleepCtx(ctx, d)
+	return d
+}
+
+// sleepBackoff waits backoffDelay(attempt), aborting on ctx cancellation.
+func sleepBackoff(ctx context.Context, attempt int) error {
+	return sleepCtx(ctx, backoffDelay(attempt))
 }

@@ -67,7 +67,8 @@ func (c *Collector) collect(ctx context.Context) protocol.HeartbeatRequest {
 	}
 
 	hb.Services = collectServices(ctx, c.watched)
-	hb.PkgUpdates = c.collectPkgUpdates(ctx)
+	// Read the background-refreshed cache; never measure apt on the beat path.
+	hb.PkgUpdates = c.collectPkgUpdates()
 
 	hb.CapturedAt = time.Now().UTC().Format(time.RFC3339)
 	return hb
@@ -252,21 +253,11 @@ func collectServices(ctx context.Context, watched []string) []protocol.ServiceSt
 	return out
 }
 
-// collectPkgUpdates simulates an apt upgrade to count pending updates and
-// checks for /var/run/reboot-required. Results are cached for pkgCacheTTL.
-// Returns nil when apt is unavailable or the simulation fails — the wire
-// contract is "null when not measured".
-func (c *Collector) collectPkgUpdates(ctx context.Context) *protocol.PkgUpdateSummary {
-	c.pkgMu.Lock()
-	defer c.pkgMu.Unlock()
-	if c.pkg != nil && time.Since(c.pkg.at) < pkgCacheTTL {
-		return c.pkg.val
-	}
-	val := measurePkgUpdates(ctx)
-	c.pkg = &pkgCache{at: time.Now(), val: val}
-	return val
-}
-
+// measurePkgUpdates simulates an apt upgrade to count pending updates and
+// checks for /var/run/reboot-required. It is expensive, so it runs only on the
+// Collector's background refresher (see Start). Returns nil when apt is
+// unavailable or the simulation fails — the wire contract is "null when not
+// measured".
 func measurePkgUpdates(ctx context.Context) *protocol.PkgUpdateSummary {
 	if !apt.Available() {
 		return nil

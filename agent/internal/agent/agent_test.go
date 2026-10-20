@@ -143,6 +143,55 @@ func TestLoopDeliversCancelToRunningJob(t *testing.T) {
 	}
 }
 
+// TestLoopHeartbeatsImmediately proves a freshly enrolled target does not wait
+// a full interval before its first beat. The first heartbeat is what promotes
+// PENDING_ENROLMENT to ONLINE and carries the first telemetry, so with the
+// 1h interval used here a ticker-based loop would never beat within the test.
+func TestLoopHeartbeatsImmediately(t *testing.T) {
+	firstBeat := make(chan struct{})
+	var once sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != protocol.PathHearbeat {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		once.Do(func() { close(firstBeat) })
+		writeJSON(t, w, protocol.HeartbeatResponse{})
+	}))
+	defer srv.Close()
+
+	client, err := protocol.NewClient(srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	a := &loop{
+		opts: Options{
+			Version:   "test",
+			Config:    &config.Config{ControlPlaneURL: srv.URL},
+			State:     &config.State{Credential: "test-cred"},
+			Client:    client,
+			Collector: metrics.NewCollector(nil),
+			Runner:    newFakeRunner(),
+			Logger:    log.New(io.Discard, "", 0),
+		},
+		interval: time.Hour,
+	}
+
+	go func() { _ = a.run(ctx) }()
+
+	select {
+	case <-firstBeat:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no heartbeat within 2s despite an immediate first beat being required")
+	}
+	cancel()
+}
+
 func writeJSON(t *testing.T, w http.ResponseWriter, v any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
