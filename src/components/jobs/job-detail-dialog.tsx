@@ -21,6 +21,7 @@ import {
   useSnackbar,
 } from "@/components/ui";
 import { RelativeTime } from "@/components/common/relative-time";
+import { RetryJobButton, isRetryableJob } from "@/components/jobs/retry-job-button";
 
 const TERMINAL_STATUSES: ReadonlySet<JobDto["status"]> = new Set([
   "SUCCEEDED",
@@ -54,6 +55,7 @@ export function JobDetailDialog({ jobId, open, onOpenChange, onChanged }: JobDet
   }, [data]);
 
   const isActive = data !== null && !TERMINAL_STATUSES.has(data.status);
+  const retryableJob = data !== null && isRetryableJob(data.status) ? data : null;
 
   async function cancel() {
     if (!jobId) return;
@@ -162,6 +164,17 @@ export function JobDetailDialog({ jobId, open, onOpenChange, onChanged }: JobDet
               >
                 Cancel job
               </Button>
+            ) : null}
+            {retryableJob ? (
+              <RetryJobButton
+                jobId={retryableJob.id}
+                ariaLabel={`Retry ${JOB_TYPE_LABEL[retryableJob.type]} job`}
+                size="md"
+                onRetried={() => {
+                  refresh();
+                  onChanged?.();
+                }}
+              />
             ) : null}
             <Button variant="text" onClick={() => onOpenChange(false)}>
               Close

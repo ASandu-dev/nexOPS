@@ -201,7 +201,11 @@ export function OverviewClient() {
               />
             </div>
           ) : (
-            <JobsTable jobs={data.recentJobs} onSelect={(job: JobDto) => setSelectedJobId(job.id)} />
+            <JobsTable
+              jobs={data.recentJobs}
+              onSelect={(job: JobDto) => setSelectedJobId(job.id)}
+              onRetried={() => refresh()}
+            />
           )}
         </CardContent>
       </Card>

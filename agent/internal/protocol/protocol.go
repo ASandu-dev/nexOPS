@@ -5,7 +5,9 @@
 package protocol
 
 import (
+	"fmt"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -16,6 +18,9 @@ const (
 	JobAPTFixBroken = "APT_FIX_BROKEN"
 	JobCheckUpdates = "CHECK_UPDATES"
 	JobServiceState = "SERVICE_STATUS"
+	// JobSelfUpdate replaces the running agent binary with the latest
+	// release published by the control plane.
+	JobSelfUpdate = "SELF_UPDATE"
 )
 
 // Job result statuses. The backend accepts all four; TIMED_OUT/CANCELLED are
@@ -34,12 +39,25 @@ const DefaultJobTimeoutSec = 600
 const (
 	PathEnrol    = "/api/agent/enrol"
 	PathHearbeat = "/api/agent/heartbeat"
+	// ReleasePathPrefix serves the published agent binaries and their
+	// checksum sidecars.
+	ReleasePathPrefix = "/api/agent/releases/"
 )
 
 // JobResultPath builds the result-report path for a job id. The id is
 // path-escaped so a hostile id cannot traverse into another route.
 func JobResultPath(id string) string {
 	return "/api/agent/jobs/" + url.PathEscape(id) + "/result"
+}
+
+// ReleasePath builds the release endpoint path for a file name. Only bare
+// file names are accepted: the path must stay inside the release directory,
+// and the host is always the configured control plane (same-origin only).
+func ReleasePath(file string) (string, error) {
+	if file == "" || file == "." || file == ".." || strings.ContainsAny(file, "/\\") {
+		return "", fmt.Errorf("invalid release file name %q", file)
+	}
+	return ReleasePathPrefix + url.PathEscape(file), nil
 }
 
 // EnrolRequest is POSTed once on first start. The signature is a base64

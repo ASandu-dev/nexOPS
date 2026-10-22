@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Plus, Search, Server } from "lucide-react";
+import { Plus, Rocket, Search, Server } from "lucide-react";
 import type { Paginated, TargetDto } from "@/lib/types";
 import { TARGET_STATUSES } from "@/lib/types";
 import { useApi, useDebouncedValue } from "@/lib/use-api";
@@ -30,6 +30,7 @@ import { PageHeader } from "@/components/common/page-header";
 import { FilterChips } from "@/components/common/filter-chips";
 import { RelativeTime } from "@/components/common/relative-time";
 import { EnrolDialog } from "@/components/targets/enrol-dialog";
+import { BulkUpgradeDialog } from "@/components/targets/bulk-upgrade-dialog";
 
 const STATUS_OPTIONS = TARGET_STATUSES.map((status) => ({
   value: status,
@@ -59,6 +60,7 @@ export function TargetsClient() {
   const [order, setOrder] = useState("desc");
   const [page, setPage] = useState(1);
   const [enrolOpen, setEnrolOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
 
   const debouncedSearch = useDebouncedValue(search, 300);
   const debouncedLabel = useDebouncedValue(label, 300);
@@ -90,9 +92,18 @@ export function TargetsClient() {
         title="Targets"
         description="Every VM managed by the control plane."
         actions={
-          <Button onClick={() => setEnrolOpen(true)} leadingIcon={<Plus className="size-4" aria-hidden="true" />}>
-            Add target
-          </Button>
+          <>
+            <Button
+              variant="outlined"
+              onClick={() => setBulkOpen(true)}
+              leadingIcon={<Rocket className="size-4" aria-hidden="true" />}
+            >
+              Upgrade all targets
+            </Button>
+            <Button onClick={() => setEnrolOpen(true)} leadingIcon={<Plus className="size-4" aria-hidden="true" />}>
+              Add target
+            </Button>
+          </>
         }
       />
 
@@ -178,6 +189,14 @@ export function TargetsClient() {
       )}
 
       <EnrolDialog open={enrolOpen} onOpenChange={setEnrolOpen} onCreated={refresh} />
+      <BulkUpgradeDialog
+        open={bulkOpen}
+        onOpenChange={setBulkOpen}
+        onDispatched={() => {
+          refresh();
+          router.refresh();
+        }}
+      />
     </div>
   );
 }

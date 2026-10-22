@@ -84,6 +84,6 @@ func run() error {
 		State:     &state,
 		Client:    client,
 		Collector: metrics.NewCollector(cfg.WatchedServices),
-		Runner:    jobs.NewRunner(),
+		Runner:    jobs.NewRunner(jobs.Options{Releases: client, Version: version}),
 	})
 }

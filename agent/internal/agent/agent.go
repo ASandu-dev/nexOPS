@@ -33,11 +33,11 @@ const (
 	collectTimeout = 10 * time.Second
 )
 
-// jobRunner executes a single job and returns its wire result. *jobs.Runner is
-// the production implementation; tests inject a fake so the loop can be driven
-// without spawning real processes.
+// jobRunner executes a single job and returns its wire result plus any
+// follow-up action. *jobs.Runner is the production implementation; tests
+// inject a fake so the loop can be driven without spawning real processes.
 type jobRunner interface {
-	Run(ctx context.Context, job protocol.Job) protocol.JobResultRequest
+	Run(ctx context.Context, job protocol.Job) jobs.Outcome
 }
 
 // Options wires the agent's dependencies (all injectable for tests).
@@ -60,7 +60,7 @@ func Run(ctx context.Context, o Options) error {
 		o.Logger = log.Default()
 	}
 	if o.Runner == nil {
-		o.Runner = jobs.NewRunner()
+		o.Runner = jobs.NewRunner(jobs.Options{Releases: o.Client, Version: o.Version})
 	}
 	if o.Collector == nil {
 		o.Collector = metrics.NewCollector(o.Config.WatchedServices)
@@ -244,11 +244,28 @@ func (a *loop) worker(ctx context.Context, q *jobQueue) {
 			return
 		}
 		a.opts.Logger.Printf("job %s (%s) starting", job.ID, job.Type)
-		result := a.opts.Runner.Run(jctx, job)
+		outcome := a.opts.Runner.Run(jctx, job)
 		q.markDone(job.ID)
-		if err := a.reportResult(ctx, job.ID, result); err != nil {
+		// The result is reported BEFORE any restart: the control plane must
+		// learn the outcome before the process image is replaced.
+		if err := a.reportResult(ctx, job.ID, outcome.Result); err != nil {
 			a.opts.Logger.Printf("report result for job %s failed: %v", job.ID, err)
 		}
+		if outcome.RestartPath != "" {
+			a.restart(outcome.RestartPath)
+		}
+	}
+}
+
+// restart replaces the running process with the freshly installed binary.
+// The PID is preserved, so systemd keeps tracking the same service and
+// containers behave like a plain restart. It never returns on success.
+func (a *loop) restart(path string) {
+	a.opts.Logger.Printf("restarting the agent with %s", path)
+	if err := execRestart(path); err != nil {
+		// The new binary is already installed: it activates on the next
+		// process start. Keep running instead of failing silently.
+		a.opts.Logger.Printf("could not exec %s: %v — the new agent stays installed and activates on the next start", path, err)
 	}
 }
 

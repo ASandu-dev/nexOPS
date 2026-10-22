@@ -2,8 +2,13 @@ package jobs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +16,83 @@ import (
 	"github.com/nexops/agent/internal/apt"
 	"github.com/nexops/agent/internal/protocol"
 )
+
+// fakeReleaseFetcher serves release artefacts from an in-memory map.
+type fakeReleaseFetcher struct {
+	files map[string][]byte
+}
+
+func (f *fakeReleaseFetcher) Release(_ context.Context, file string) ([]byte, error) {
+	data, ok := f.files[file]
+	if !ok {
+		return nil, fmt.Errorf("release %q not found", file)
+	}
+	return data, nil
+}
+
+// TestRunSelfUpdateReportsResultBeforeRestart: a SELF_UPDATE job reports a
+// successful result and asks the agent to restart with the new binary.
+func TestRunSelfUpdateReportsResultBeforeRestart(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "nexops-agent")
+	if err := os.WriteFile(exe, []byte("old binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	released := []byte("#!/bin/sh\necho 'nexops-agent 9.9.9 (linux/amd64)'\n")
+	sum := sha256.Sum256(released)
+	fetcher := &fakeReleaseFetcher{files: map[string][]byte{
+		"nexops-agent-linux-amd64":        released,
+		"nexops-agent-linux-amd64.sha256": []byte(fmt.Sprintf("%s  nexops-agent-linux-amd64\n", hex.EncodeToString(sum[:]))),
+	}}
+
+	out := NewRunner(Options{
+		Releases: fetcher,
+		Version:  "1.0.0",
+		Arch:     "amd64",
+		ExecPath: exe,
+	}).Run(context.Background(), protocol.Job{Type: protocol.JobSelfUpdate})
+
+	if out.Result.Status != protocol.ResultSucceeded {
+		t.Fatalf("status = %s, want SUCCEEDED", out.Result.Status)
+	}
+	if out.Result.StdoutTail == nil || !strings.Contains(*out.Result.StdoutTail, "installed 9.9.9 (old 1.0.0), restarting agent") {
+		t.Fatalf("stdout = %v", out.Result.StdoutTail)
+	}
+	if out.RestartPath != exe {
+		t.Fatalf("restart path = %q, want %q", out.RestartPath, exe)
+	}
+	if out.Result.StartedAt == nil || out.Result.FinishedAt == nil {
+		t.Fatal("timestamps must be set")
+	}
+}
+
+// TestRunSelfUpdateFailureIsReported: a failed update reports FAILED and
+// requests no restart.
+func TestRunSelfUpdateFailureIsReported(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "nexops-agent")
+	if err := os.WriteFile(exe, []byte("old binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out := NewRunner(Options{
+		Releases: &fakeReleaseFetcher{files: map[string][]byte{}},
+		Version:  "1.0.0",
+		Arch:     "amd64",
+		ExecPath: exe,
+	}).Run(context.Background(), protocol.Job{Type: protocol.JobSelfUpdate})
+
+	if out.Result.Status != protocol.ResultFailed {
+		t.Fatalf("status = %s, want FAILED", out.Result.Status)
+	}
+	if out.Result.StderrTail == nil || !strings.Contains(*out.Result.StderrTail, "download") {
+		t.Fatalf("stderr = %v", out.Result.StderrTail)
+	}
+	if out.RestartPath != "" {
+		t.Fatalf("restart path = %q, want none", out.RestartPath)
+	}
+}
 
 func TestValidateServiceName(t *testing.T) {
 	valid := []string{"nginx", "ssh", "sshd", "cron", "systemd-journald", "getty@tty1", "app.timer", "foo_bar", "a.b-c_d@e"}
@@ -147,11 +229,12 @@ func TestBuildSpecAptResolverErrorPropagates(t *testing.T) {
 }
 
 func TestRunInvalidServiceReportsFailedWithoutExec(t *testing.T) {
-	r := NewRunner()
-	res := r.Run(context.Background(), protocol.Job{
+	r := NewRunner(Options{})
+	out := r.Run(context.Background(), protocol.Job{
 		Type:   protocol.JobServiceState,
 		Params: map[string]any{"service": "nginx; id"},
 	})
+	res := out.Result
 	if res.Status != protocol.ResultFailed {
 		t.Fatalf("status = %s, want FAILED", res.Status)
 	}
@@ -167,7 +250,8 @@ func TestRunInvalidServiceReportsFailedWithoutExec(t *testing.T) {
 }
 
 func TestRunUnknownTypeReportsFailed(t *testing.T) {
-	res := NewRunner().Run(context.Background(), protocol.Job{Type: "NOPE"})
+	out := NewRunner(Options{}).Run(context.Background(), protocol.Job{Type: "NOPE"})
+	res := out.Result
 	if res.Status != protocol.ResultFailed {
 		t.Fatalf("status = %s", res.Status)
 	}
@@ -179,7 +263,7 @@ func TestRunUnknownTypeReportsFailed(t *testing.T) {
 // TestRunnerTimeoutKillsCommand uses a real child process (`sleep`) with a
 // tiny timeout and asserts the runner kills it promptly and reports TIMED_OUT.
 func TestRunnerTimeoutKillsCommand(t *testing.T) {
-	r := NewRunner()
+	r := NewRunner(Options{})
 	start := time.Now()
 	res := r.exec(context.Background(), cmdSpec{name: "sleep", args: []string{"30"}}, 200*time.Millisecond)
 	elapsed := time.Since(start)
@@ -202,7 +286,7 @@ func TestRunnerCancelKillsCommand(t *testing.T) {
 	if !hasSh() {
 		t.Skip("sh not available")
 	}
-	r := NewRunner()
+	r := NewRunner(Options{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -269,7 +353,7 @@ func TestRunnerCapturesOutput(t *testing.T) {
 	if !hasSh() {
 		t.Skip("sh not available")
 	}
-	r := NewRunner()
+	r := NewRunner(Options{})
 	res := r.exec(context.Background(), cmdSpec{name: "sh", args: []string{"-c", "echo out; echo err >&2; exit 3"}}, 5*time.Second)
 	if res.exitCode != 3 {
 		t.Fatalf("exitCode = %d, want 3", res.exitCode)

@@ -15,6 +15,9 @@ NexOPS is a self-hosted control plane for managing Linux VMs and hosts — targe
   - `APT_FIX_BROKEN` — `DEBIAN_FRONTEND=noninteractive apt-get -f install -y`
   - `CHECK_UPDATES` — `apt-get -s upgrade` (dry-run count)
   - `SERVICE_STATUS` — `systemctl status <service> --no-pager -l`
+  - `SELF_UPDATE` — downloads the release binary for the target architecture, verifies the `.sha256`, atomically swaps it in, reports the result, then re-execs the agent
+- **Fleet-wide upgrade dispatch** — one request queues an APT upgrade or an agent self-update on every eligible target; ineligible targets (offline, pending enrolment, enrolment failed, maintenance) are skipped and reported back with their reason.
+- **One-click job retry** — failed and timed-out jobs can be re-queued from the jobs list, the target job history, or the job dialog; the original job is kept as history and the retry is queued as a new job.
 - **Audit log** — every mutation writes an `AuditEvent` (actor ID + type, action, target type + ID, metadata, timestamp); reads are not audited.
 - **Dark / light theme** — preference stored in a cookie and mirrored to localStorage; the server renders the correct class on `<html>` so it is right on every page including sign-in; a blocking inline bootstrap in `<head>` applies the system preference on first visit with no flash.
 - **Target detail with live polling** — telemetry charts and job history refresh at 15 s / 30 s intervals; status badge refreshes on the 15 s poll.
@@ -108,7 +111,7 @@ There is currently no TypeScript test suite.
 - Single-node control plane (no HA, no leader election)
 - Linux-only agents (Ubuntu 22.04+ / Debian 12+; amd64 and arm64)
 - Targets must be able to reach the control plane outbound over HTTPS (port 443 in production)
-- Agent binaries are baked into the control-plane image; agent upgrades require re-running the install command on each target
+- Agent binaries are baked into the control-plane image; agents built with self-update support upgrade themselves from the dashboard, while agents predating it need one final manual re-run of the install command (bootstrap). Release binaries are also attached to GitHub Releases.
 - Early-stage project — expect breaking changes
 - No built-in secrets management beyond Clerk; bring your own Vault/Sealed Secrets if needed
 - Telemetry retention defaults to 30 days; adjust via `TELEMETRY_RETENTION_DAYS` or Settings API

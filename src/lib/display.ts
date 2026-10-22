@@ -22,6 +22,7 @@ export const JOB_TYPE_LABEL: Record<JobType, string> = {
   APT_FIX_BROKEN: "Fix broken packages",
   CHECK_UPDATES: "Check updates",
   SERVICE_STATUS: "Service status",
+  SELF_UPDATE: "Agent self-update",
 };
 
 export const JOB_TYPE_DESCRIPTION: Record<JobType, string> = {
@@ -30,6 +31,7 @@ export const JOB_TYPE_DESCRIPTION: Record<JobType, string> = {
   APT_FIX_BROKEN: "Fix broken dependencies (apt-get -f install).",
   CHECK_UPDATES: "Report how many package updates are available.",
   SERVICE_STATUS: "Report the state of watched systemd services.",
+  SELF_UPDATE: "Install the latest agent release and restart the agent.",
 };
 
 export const ACTOR_TYPE_LABEL: Record<ActorType, string> = {

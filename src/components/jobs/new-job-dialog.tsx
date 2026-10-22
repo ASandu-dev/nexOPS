@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
+import { AlertTriangle } from "lucide-react";
 import type { JobDto, JobType, Paginated, TargetDto } from "@/lib/types";
 import { JOB_TYPES } from "@/lib/types";
 import { apiFetch, toApiError, useApi } from "@/lib/use-api";
@@ -31,13 +32,20 @@ export function NewJobDialog({ open, onOpenChange, defaultTargetId, onCreated }:
   const [targetId, setTargetId] = useState(defaultTargetId ?? "");
   const [type, setType] = useState<JobType>("CHECK_UPDATES");
   const [submitting, setSubmitting] = useState(false);
+  // A self-update replaces the agent binary, so it needs an explicit
+  // acknowledgement before the job can be queued.
+  const [selfUpdateAcknowledged, setSelfUpdateAcknowledged] = useState(false);
+  const selfUpdateAckId = useId();
 
   const { data, error, loading, refresh } = useApi<Paginated<TargetDto>>(
     open ? "/api/targets?pageSize=100&sort=name&order=asc" : null,
   );
 
   useEffect(() => {
-    if (open) setTargetId(defaultTargetId ?? "");
+    if (open) {
+      setTargetId(defaultTargetId ?? "");
+      setSelfUpdateAcknowledged(false);
+    }
   }, [open, defaultTargetId]);
 
   const targets = data?.items ?? [];
@@ -46,9 +54,16 @@ export function NewJobDialog({ open, onOpenChange, defaultTargetId, onCreated }:
     label: `${target.name} · ${target.status.replace(/_/g, " ").toLowerCase()}`,
   }));
 
+  const isSelfUpdate = type === "SELF_UPDATE";
+  const canSubmit = !isSelfUpdate || selfUpdateAcknowledged;
+
   async function submit() {
     if (!targetId) {
       notify({ message: "Select a target first.", variant: "warning" });
+      return;
+    }
+    if (!canSubmit) {
+      notify({ message: "Confirm the agent restart before queueing a self-update.", variant: "warning" });
       return;
     }
     setSubmitting(true);
@@ -96,11 +111,41 @@ export function NewJobDialog({ open, onOpenChange, defaultTargetId, onCreated }:
             <Select
               label="Job type"
               value={type}
-              onChange={(event) => setType(event.target.value as JobType)}
+              onChange={(event) => {
+                const next = event.target.value as JobType;
+                setType(next);
+                if (next !== "SELF_UPDATE") setSelfUpdateAcknowledged(false);
+              }}
               options={JOB_TYPES.map((value) => ({ value, label: JOB_TYPE_LABEL[value] }))}
             />
             <p className="text-xs text-on-surface-variant">{JOB_TYPE_DESCRIPTION[type]}</p>
           </div>
+
+          {isSelfUpdate ? (
+            <div className="flex flex-col gap-3 rounded-md border border-warning/40 bg-warning-container px-3 py-3">
+              <p className="flex items-start gap-2 text-sm text-on-warning-container">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                <span>
+                  A self-update replaces the agent binary on the target with the latest release and
+                  restarts the agent. The target stays enrolled; if the update fails, the previous
+                  binary keeps running.
+                </span>
+              </p>
+              <label
+                htmlFor={selfUpdateAckId}
+                className="flex items-start gap-2 text-sm text-on-warning-container"
+              >
+                <input
+                  id={selfUpdateAckId}
+                  type="checkbox"
+                  checked={selfUpdateAcknowledged}
+                  onChange={(event) => setSelfUpdateAcknowledged(event.target.checked)}
+                  className="mt-0.5 size-4 shrink-0 accent-primary focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+                />
+                <span>I understand the agent will be replaced and restarted.</span>
+              </label>
+            </div>
+          ) : null}
         </div>
       )}
 
@@ -108,8 +153,12 @@ export function NewJobDialog({ open, onOpenChange, defaultTargetId, onCreated }:
         <Button variant="text" onClick={() => onOpenChange(false)} disabled={submitting}>
           Cancel
         </Button>
-        <Button onClick={submit} loading={submitting} disabled={loading || error !== null}>
-          Queue job
+        <Button
+          onClick={submit}
+          loading={submitting}
+          disabled={loading || error !== null || !canSubmit}
+        >
+          {isSelfUpdate ? "Queue self-update" : "Queue job"}
         </Button>
       </DialogFooter>
     </Dialog>

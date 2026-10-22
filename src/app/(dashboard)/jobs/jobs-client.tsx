@@ -136,7 +136,11 @@ export function JobsClient() {
         />
       ) : (
         <>
-          <JobsTable jobs={data.items} onSelect={(job) => setSelectedJobId(job.id)} />
+          <JobsTable
+            jobs={data.items}
+            onSelect={(job) => setSelectedJobId(job.id)}
+            onRetried={() => refresh()}
+          />
           <Pagination
             page={data.page}
             totalPages={data.totalPages}

@@ -11,7 +11,11 @@ export type ErrorCode =
   | "RATE_LIMITED"
   | "BAD_REQUEST"
   | "PAYLOAD_TOO_LARGE"
-  | "INTERNAL_ERROR";
+  | "INTERNAL_ERROR"
+  // Job-specific conflict codes. Lower-case because they are part of the
+  // published endpoint contract (the dashboard branches on them).
+  | "job_not_retryable"
+  | "job_already_active";
 
 export interface FieldIssue {
   path: string;
@@ -54,6 +58,14 @@ export const notFound = (message = "Resource not found"): ApiError =>
 
 export const conflict = (message: string): ApiError =>
   new ApiError(409, "CONFLICT", message);
+
+/** 409: the job is not in a state that can be retried. */
+export const jobNotRetryable = (message: string): ApiError =>
+  new ApiError(409, "job_not_retryable", message);
+
+/** 409: another job of the same type is already active for the target. */
+export const jobAlreadyActive = (message: string): ApiError =>
+  new ApiError(409, "job_already_active", message);
 
 const zodIssues = (error: ZodError): FieldIssue[] =>
   error.issues.map((issue) => ({

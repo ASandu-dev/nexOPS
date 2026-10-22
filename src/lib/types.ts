@@ -31,8 +31,23 @@ export const JOB_TYPES = [
   "APT_FIX_BROKEN",
   "CHECK_UPDATES",
   "SERVICE_STATUS",
+  "SELF_UPDATE",
 ] as const;
 export type JobType = (typeof JOB_TYPES)[number];
+
+/** Job types that can be dispatched to a whole fleet in one request. */
+export const BULK_JOB_TYPES = ["APT_UPGRADE", "SELF_UPDATE"] as const;
+export type BulkJobType = (typeof BULK_JOB_TYPES)[number];
+
+/** Why a target was not eligible for a bulk job. */
+export const BULK_SKIP_REASONS = [
+  "offline",
+  "pending_enrolment",
+  "enrolment_failed",
+  "maintenance",
+  "not_found",
+] as const;
+export type BulkSkipReason = (typeof BULK_SKIP_REASONS)[number];
 
 export const JOB_STATUSES = [
   "QUEUED",
@@ -236,6 +251,20 @@ export interface JobDto {
   timeoutSec: number;
   /** Target display name; populated by endpoints that join `Target`. */
   targetName?: string | null;
+}
+
+/** One target that was not eligible for a bulk job, with the reason why. */
+export interface BulkSkipDto {
+  targetId: string;
+  reason: BulkSkipReason;
+}
+
+/** Response of `POST /api/jobs/bulk`. */
+export interface BulkJobResultDto {
+  /** Number of jobs created (always 0 when nothing was eligible). */
+  created: number;
+  /** One entry per skipped target. */
+  skipped: BulkSkipDto[];
 }
 
 // ---------------------------------------------------------------------------

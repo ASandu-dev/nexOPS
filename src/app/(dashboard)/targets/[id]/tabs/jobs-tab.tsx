@@ -56,7 +56,12 @@ export function JobsTab({ targetId }: { targetId: string }) {
         />
       ) : (
         <>
-          <JobsTable jobs={data.items} showTarget={false} onSelect={(job) => setSelectedJobId(job.id)} />
+          <JobsTable
+            jobs={data.items}
+            showTarget={false}
+            onSelect={(job) => setSelectedJobId(job.id)}
+            onRetried={() => refresh()}
+          />
           <Pagination
             page={data.page}
             totalPages={data.totalPages}

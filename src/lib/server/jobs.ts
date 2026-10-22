@@ -1,9 +1,9 @@
 import type { Job, Prisma } from "@prisma/client";
-import type { JobStatus, Paginated, JobDto } from "@/lib/types";
+import type { JobStatus, JobType, Paginated, JobDto } from "@/lib/types";
 import { prisma } from "./prisma";
-import { recordAudit } from "./audit";
+import { recordAudit, writeAudit, type AuditInput } from "./audit";
 import { toJobDto, toPaginated, emptyPaginated } from "./dto";
-import { conflict, notFound } from "./errors";
+import { conflict, jobAlreadyActive, jobNotRetryable, notFound } from "./errors";
 import { getSettings } from "./settings";
 
 const TERMINAL_STATUSES: readonly JobStatus[] = ["SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"];
@@ -110,19 +110,32 @@ async function pickupGraceSec(): Promise<number> {
 
 export interface CreateJobInput {
   targetId: string;
-  type: "APT_UPDATE" | "APT_UPGRADE" | "APT_FIX_BROKEN" | "CHECK_UPDATES" | "SERVICE_STATUS";
+  type: JobType;
   params: Record<string, unknown> | null;
 }
 
-/** Creates a QUEUED job after verifying the target exists (not soft-deleted). */
-export async function createJob(input: CreateJobInput, requestedBy: string): Promise<Job> {
-  const target = await prisma.target.findFirst({
+/**
+ * Shared job-creation core. `store` is the client the rows are written
+ * through: the pooled client for a standalone job, a transaction client when
+ * the job must be atomic with other writes (bulk dispatch).
+ *
+ * `audit` decides how the audit event is written: standalone jobs tolerate an
+ * audit failure, transactional ones must not (a failed statement aborts the
+ * transaction, so the event has to be part of the atomic unit).
+ */
+async function insertJob(
+  store: Prisma.TransactionClient,
+  input: CreateJobInput,
+  requestedBy: string,
+  audit: (event: AuditInput) => Promise<void>,
+): Promise<Job> {
+  const target = await store.target.findFirst({
     where: { id: input.targetId, deletedAt: null },
     select: { id: true, name: true },
   });
   if (!target) throw notFound("Target not found");
 
-  const job = await prisma.job.create({
+  const job = await store.job.create({
     data: {
       targetId: target.id,
       type: input.type,
@@ -131,7 +144,7 @@ export async function createJob(input: CreateJobInput, requestedBy: string): Pro
       ...(input.params !== null ? { params: input.params as Prisma.InputJsonValue } : {}),
     },
   });
-  await recordAudit({
+  await audit({
     actorId: requestedBy,
     actorType: "USER",
     action: "job.create",
@@ -142,6 +155,106 @@ export async function createJob(input: CreateJobInput, requestedBy: string): Pro
     metadata: { jobId: job.id, jobType: job.type, targetName: target.name },
   });
   return job;
+}
+
+/** Creates a QUEUED job after verifying the target exists (not soft-deleted). */
+export async function createJob(input: CreateJobInput, requestedBy: string): Promise<Job> {
+  return insertJob(prisma, input, requestedBy, recordAudit);
+}
+
+/**
+ * Creates a QUEUED job inside an existing transaction, so the job row and its
+ * audit event commit or roll back together.
+ */
+export async function createJobInTx(
+  tx: Prisma.TransactionClient,
+  input: CreateJobInput,
+  requestedBy: string,
+): Promise<Job> {
+  return insertJob(tx, input, requestedBy, (event) => writeAudit(tx, event));
+}
+
+/** Job statuses a retry may be started from. */
+const RETRYABLE_STATUSES: readonly JobStatus[] = ["FAILED", "TIMED_OUT"];
+
+/** Job statuses that block a retry: the target is already busy with the same work. */
+const ACTIVE_STATUSES: readonly JobStatus[] = ["QUEUED", "DISPATCHED", "RUNNING"];
+
+/**
+ * Narrows a stored JSON value to a Prisma input value. The `params` column is
+ * `Json?`, so a top-level JSON null is stored as SQL NULL — the only value
+ * that cannot be written back.
+ */
+function jsonInput(value: Prisma.JsonValue): Prisma.InputJsonValue | undefined {
+  if (value === null) return undefined;
+  // Prisma's input type excludes a top-level null; every other JSON document
+  // is a valid input value.
+  return value as unknown as Prisma.InputJsonValue;
+}
+
+/**
+ * Re-queues a failed job as a NEW job (history is never rewritten): the new
+ * row copies the target, type, params and timeout of the original.
+ *
+ * Only FAILED and TIMED_OUT jobs can be retried, and only when no job of the
+ * same type is still active for the target. The check and the insert run in
+ * one transaction behind an advisory lock, so two concurrent retries cannot
+ * both see "no active job" and queue the same work twice.
+ */
+export async function retryJob(jobId: string, actorId: string): Promise<Job> {
+  const original = await prisma.job.findUnique({ where: { id: jobId } });
+  if (!original) throw notFound("Job not found");
+
+  if (!RETRYABLE_STATUSES.includes(original.status)) {
+    throw jobNotRetryable(
+      `Job is ${original.status}; only FAILED or TIMED_OUT jobs can be retried`,
+    );
+  }
+
+  return prisma.$transaction(async (tx) => {
+    // Serialize retries per (target, type). The lock is released when the
+    // transaction ends, so a failed attempt never blocks the next one.
+    await tx.$executeRaw`
+      SELECT pg_advisory_xact_lock(
+        ('x' || substr(md5(${`${original.targetId}:${original.type}`}), 1, 16))::bit(64)::bigint
+      )
+    `;
+
+    const active = await tx.job.findFirst({
+      where: {
+        targetId: original.targetId,
+        type: original.type,
+        status: { in: [...ACTIVE_STATUSES] },
+      },
+      select: { id: true },
+    });
+    if (active) {
+      throw jobAlreadyActive(
+        `A ${original.type} job is already active for this target (job ${active.id})`,
+      );
+    }
+
+    const params = jsonInput(original.params);
+    const job = await tx.job.create({
+      data: {
+        targetId: original.targetId,
+        type: original.type,
+        requestedBy: actorId,
+        timeoutSec: original.timeoutSec,
+        ...(params !== undefined ? { params } : {}),
+      },
+    });
+
+    await writeAudit(tx, {
+      actorId,
+      actorType: "USER",
+      action: "job.retry",
+      targetType: "job",
+      targetId: original.targetId,
+      metadata: { originalJobId: original.id, newJobId: job.id },
+    });
+    return job;
+  });
 }
 
 /** QUEUED/DISPATCHED/RUNNING → CANCELLED; terminal jobs are a 409. */

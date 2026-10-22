@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nexops/agent/internal/config"
+	"github.com/nexops/agent/internal/jobs"
 	"github.com/nexops/agent/internal/metrics"
 	"github.com/nexops/agent/internal/protocol"
 )
@@ -28,15 +29,15 @@ func newFakeRunner() *fakeRunner {
 	return &fakeRunner{started: make(chan struct{})}
 }
 
-func (f *fakeRunner) Run(ctx context.Context, _ protocol.Job) protocol.JobResultRequest {
+func (f *fakeRunner) Run(ctx context.Context, _ protocol.Job) jobs.Outcome {
 	f.once.Do(func() { close(f.started) })
 	<-ctx.Done()
 	now := time.Now().UTC().Format(time.RFC3339)
-	return protocol.JobResultRequest{
+	return jobs.Outcome{Result: protocol.JobResultRequest{
 		Status:     protocol.ResultCancelled,
 		StartedAt:  &now,
 		FinishedAt: &now,
-	}
+	}}
 }
 
 // TestLoopDeliversCancelToRunningJob proves the end-to-end agent contract: a

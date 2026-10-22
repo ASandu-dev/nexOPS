@@ -32,6 +32,7 @@ enum JobType {
   APT_FIX_BROKEN
   CHECK_UPDATES
   SERVICE_STATUS
+  SELF_UPDATE
 }
 
 enum JobStatus {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/nexops/agent/internal/apt"
 	"github.com/nexops/agent/internal/protocol"
+	"github.com/nexops/agent/internal/selfupdate"
 	"github.com/nexops/agent/internal/units"
 )
 
@@ -28,15 +29,52 @@ const TailCapBytes = 64 * 1024
 // killed, so a killed apt child holding the pipe cannot stall the agent.
 const waitDelay = 5 * time.Second
 
+// Outcome is the result of one job execution plus the follow-up action the
+// agent must take once the result has been reported to the control plane.
+type Outcome struct {
+	// Result is the wire result reported to the control plane.
+	Result protocol.JobResultRequest
+	// RestartPath, when non-empty, is the binary the agent must exec after
+	// reporting Result (SELF_UPDATE installed a new release).
+	RestartPath string
+}
+
+// Options configures a Runner.
+type Options struct {
+	// Releases serves the agent release artefacts for SELF_UPDATE jobs.
+	Releases selfupdate.Fetcher
+	// Version is the version of the running agent.
+	Version string
+	// Arch overrides the architecture of the running binary (tests).
+	Arch string
+	// ExecPath overrides the resolved executable path (tests).
+	ExecPath string
+}
+
 // Runner executes jobs. TailBytes caps reported output; NewRunner applies
 // TailCapBytes.
 type Runner struct {
 	TailBytes int
+
+	// releases serves the agent release artefacts for SELF_UPDATE jobs.
+	releases selfupdate.Fetcher
+	// version is the version of the running agent.
+	version string
+	// arch overrides runtime.GOARCH (tests).
+	arch string
+	// execPath overrides the resolved executable path (tests).
+	execPath string
 }
 
 // NewRunner returns a Runner with the default tail cap.
-func NewRunner() *Runner {
-	return &Runner{TailBytes: TailCapBytes}
+func NewRunner(opts Options) *Runner {
+	return &Runner{
+		TailBytes: TailCapBytes,
+		releases:  opts.Releases,
+		version:   opts.Version,
+		arch:      opts.Arch,
+		execPath:  opts.ExecPath,
+	}
 }
 
 // cmdSpec is an argv vector plus extra environment assignments — never a
@@ -51,26 +89,62 @@ type cmdSpec struct {
 // error: failures (unknown type, invalid params, non-zero exit, timeout) are
 // reported through the result status so the control plane always receives a
 // terminal state.
-func (r *Runner) Run(ctx context.Context, job protocol.Job) protocol.JobResultRequest {
+func (r *Runner) Run(ctx context.Context, job protocol.Job) Outcome {
+	if job.Type == protocol.JobSelfUpdate {
+		return r.runSelfUpdate(ctx, job)
+	}
+
 	started := time.Now().UTC()
 
 	spec, err := buildSpec(job)
 	if err != nil {
 		// Validation failure: no process ran, so exitCode stays null.
 		finished := time.Now().UTC()
-		return protocol.JobResultRequest{
+		return Outcome{Result: protocol.JobResultRequest{
 			Status:     protocol.ResultFailed,
 			ExitCode:   nil,
 			StdoutTail: strPtr(""),
 			StderrTail: strPtr(err.Error() + "\n"),
 			StartedAt:  strPtr(started.Format(time.RFC3339)),
 			FinishedAt: strPtr(finished.Format(time.RFC3339)),
-		}
+		}}
 	}
 
 	timeout := job.Timeout()
 	res := r.exec(ctx, spec, timeout)
-	return resultFrom(res, timeout, started)
+	return Outcome{Result: resultFrom(res, timeout, started)}
+}
+
+// runSelfUpdate performs the agent self-update: download, verify against the
+// published checksum, atomic swap. The result is reported before the agent
+// execs the new binary — the control plane must never see a job stuck in
+// RUNNING because the process was replaced mid-flight.
+func (r *Runner) runSelfUpdate(ctx context.Context, _ protocol.Job) Outcome {
+	started := time.Now().UTC()
+	updater := selfupdate.New(selfupdate.Options{
+		Fetcher:  r.releases,
+		Arch:     r.arch,
+		Version:  r.version,
+		ExecPath: r.execPath,
+	})
+	outcome := updater.Run(ctx)
+	finished := time.Now().UTC()
+
+	result := protocol.JobResultRequest{
+		ExitCode:   nil,
+		StdoutTail: strPtr(""),
+		StderrTail: strPtr(""),
+		StartedAt:  strPtr(started.Format(time.RFC3339)),
+		FinishedAt: strPtr(finished.Format(time.RFC3339)),
+	}
+	if outcome.Err != nil {
+		result.Status = protocol.ResultFailed
+		result.StderrTail = strPtr(outcome.Message + "\n")
+	} else {
+		result.Status = protocol.ResultSucceeded
+		result.StdoutTail = strPtr(outcome.Message + "\n")
+	}
+	return Outcome{Result: result, RestartPath: outcome.RestartPath}
 }
 
 // resultFrom maps an exec outcome onto the wire result. A timeout is reported

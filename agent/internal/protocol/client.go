@@ -17,6 +17,11 @@ import (
 // diagnostics (Next.js error pages can be large HTML).
 const maxResponseBody = 2 << 20 // 2 MiB
 
+// maxReleaseBytes bounds a downloaded release artefact. The agent binary is a
+// few megabytes; the cap keeps a broken or hostile server from exhausting the
+// agent's memory.
+const maxReleaseBytes = 64 << 20 // 64 MiB
+
 // errorSnippetLen is how much of a non-2xx body is kept in APIError.
 const errorSnippetLen = 2048
 
@@ -103,6 +108,41 @@ func (c *Client) Heartbeat(ctx context.Context, credential string, req Heartbeat
 // JobResult reports a finished job. The server treats replays as no-ops.
 func (c *Client) JobResult(ctx context.Context, credential, jobID string, result JobResultRequest) error {
 	return c.post(ctx, JobResultPath(jobID), credential, result, nil)
+}
+
+// Release downloads a published artefact (agent binary or checksum sidecar)
+// from the control plane's release endpoint.
+//
+// The URL is always derived from the configured base URL and the caller only
+// supplies a bare file name, so the agent can never be pointed at another
+// host: the release origin is the same one install.sh trusts.
+func (c *Client) Release(ctx context.Context, file string) ([]byte, error) {
+	apiPath, err := ReleasePath(file)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+apiPath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/octet-stream")
+	req.Header.Set("User-Agent", "nexops-agent")
+
+	httpResp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("get %s: %w", apiPath, err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode < 200 || httpResp.StatusCode > 299 {
+		raw, _ := io.ReadAll(io.LimitReader(httpResp.Body, maxResponseBody))
+		return nil, &APIError{StatusCode: httpResp.StatusCode, Body: snippet(raw)}
+	}
+	body, err := io.ReadAll(io.LimitReader(httpResp.Body, maxReleaseBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", apiPath, err)
+	}
+	return body, nil
 }
 
 func (c *Client) post(ctx context.Context, apiPath, bearer string, in, out any) error {

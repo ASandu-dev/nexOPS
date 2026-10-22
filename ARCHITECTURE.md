@@ -206,6 +206,45 @@ kills the process group and reports a `CANCELLED` result; because the job is
 already terminal, that result POST is an idempotent no-op (see below). A job
 cancelled between dispatch and the agent starting it is skipped entirely.
 
+### Bulk dispatch
+
+`POST /api/jobs/bulk` creates one job per target in a single transaction.
+
+```json
+{ "type": "APT_UPGRADE", "targetIds": ["clx…", "clx…"] }
+```
+
+`type` is either `APT_UPGRADE` or `SELF_UPDATE`. `targetIds` is optional: when
+omitted, the job targets every eligible target of the fleet. Supplied ids are
+de-duplicated, validated as CUIDs and capped at 500 per request.
+
+A target is eligible when its derived status is `ONLINE` or `DEGRADED`.
+Everything else is skipped with a reason: `offline`, `pending_enrolment`,
+`enrolment_failed`, `maintenance`, `not_found` (unknown or soft-deleted
+target). The response is always `200`:
+
+```json
+{ "created": 2, "skipped": [{ "targetId": "clx…", "reason": "offline" }] }
+```
+
+`created: 0` is a valid outcome (nothing was eligible), not an error. The
+request is audited once as `jobs.bulkCreate` with the created target ids.
+
+### Retry
+
+`POST /api/jobs/:id/retry` re-queues a failed job. The body is empty.
+
+- The original job must be `FAILED` or `TIMED_OUT`; anything else is rejected
+  with `409` and code `job_not_retryable`.
+- A different job of the same type for the same target that is still
+  `QUEUED`, `DISPATCHED` or `RUNNING` is rejected with `409` and code
+  `job_already_active`.
+
+On success a new `QUEUED` job is created with the same `targetId`, `type`,
+`params` and `timeoutSec` as the original, and the endpoint returns
+`{ "job": JobDto }`. The action is audited as `job.retry` with the original and
+new job ids.
+
 ### `POST /api/agent/jobs/:id/result`
 
 ```json
@@ -242,6 +281,42 @@ audited `/usr/local/libexec/nexops-apt` sudoers helper on hosts, or a direct
 | `APT_FIX_BROKEN` | `DEBIAN_FRONTEND=noninteractive apt-get -f install -y` | Repair a half-configured dpkg state (recovery path). |
 | `CHECK_UPDATES` | `apt-get -s upgrade` | Report how many updates are available. |
 | `SERVICE_STATUS` | `systemctl status <service> --no-pager -l` | Report a watched unit's state. |
+| `SELF_UPDATE` | *(in-process, no shell)* | Replace the running agent binary with the published release. |
+
+### Agent self-update
+
+`SELF_UPDATE` is the only job type that is not a subprocess. The agent:
+
+1. downloads `nexops-agent-linux-<arch>` and its `.sha256` sidecar from
+   `GET /api/agent/releases/:file` on the control plane it is already
+   enrolled with (same origin as `install.sh` — the agent can never be
+   pointed at another host);
+2. verifies the binary against the sidecar digest (constant-time compare);
+   a mismatch fails the job and nothing is written;
+3. writes the verified binary to a temporary file in the same directory,
+   `fsync`s it and renames it over the running binary (atomic swap — the old
+   binary survives any failure);
+4. **reports the job result first** and only then `exec`s the new binary, so
+   the control plane never sees a `RUNNING` job whose process was replaced
+   mid-flight. The PID is preserved, so systemd keeps tracking the same
+   service.
+
+If the running binary already matches the published digest, the job succeeds
+with `already up to date (<version>)` and no restart happens.
+
+**Requirements.** The agent process must be able to write to the directory of
+its own executable (`/usr/local/bin` in the shipped unit). The shipped unit
+runs unprivileged as `nexops-agent` and that directory is root-owned, so
+self-update is disabled until the operator grants the agent write access to
+it (or installs the agent in a directory it owns) — see `docs/AGENT.md`. A
+failed install leaves the running binary untouched and reports an actionable
+message. A failed `exec` does not roll back the installation: the new binary
+stays installed and activates on the next start.
+
+**Bootstrap caveat.** An agent that predates `SELF_UPDATE` does not know the
+job type and fails it with `unknown job type`. The first upgrade of an
+existing fleet must therefore use the manual install command from the host
+page; every later agent version upgrades itself from the dashboard.
 
 ---
 
@@ -290,6 +365,8 @@ All request/response bodies are Zod-validated against the DTOs in
 | `GET` | `/api/jobs/[id]` | `JobDto`. |
 | `POST` | `/api/jobs/[id]/cancel` | Cancels a non-terminal job → `JobDto`. Audited. |
 | `POST` | `/api/jobs` | Body `{ targetId, type, params? }` → `JobDto` (status `QUEUED`). Audited. |
+| `POST` | `/api/jobs/bulk` | Body `{ type, targetIds? }` → `{ created, skipped: [{ targetId, reason }] }`. Audited. |
+| `POST` | `/api/jobs/[id]/retry` | No body → `{ job: JobDto }`. Re-queues a `FAILED`/`TIMED_OUT` job. Audited. |
 | `GET` | `/api/overview` | `OverviewDto` (counts by status, degraded list, active + failed jobs, recent jobs, recent audit). |
 | `GET` | `/api/audit` | Query `page`, `action` → `Paginated<AuditEventDto>`. |
 | `GET` | `/api/settings` | `SettingsDto` (retention days, heartbeat interval, watched services). |

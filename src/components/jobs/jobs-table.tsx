@@ -13,16 +13,19 @@ import {
   TableRow,
 } from "@/components/ui";
 import { RelativeTime } from "@/components/common/relative-time";
+import { RetryJobButton, isRetryableJob } from "@/components/jobs/retry-job-button";
 
 export interface JobsTableProps {
   jobs: readonly JobDto[];
   onSelect: (job: JobDto) => void;
   /** Show the target column (hidden on the target detail page). */
   showTarget?: boolean;
+  /** Called after a job is re-queued so the caller can refresh the list. */
+  onRetried?: ((job: JobDto) => void) | undefined;
 }
 
 /** Shared jobs table. Rows are clickable; the type cell is a real button for keyboard users. */
-export function JobsTable({ jobs, onSelect, showTarget = true }: JobsTableProps) {
+export function JobsTable({ jobs, onSelect, showTarget = true, onRetried }: JobsTableProps) {
   return (
     <Table>
       <TableHeader>
@@ -34,6 +37,7 @@ export function JobsTable({ jobs, onSelect, showTarget = true }: JobsTableProps)
           <TableHead>Created</TableHead>
           <TableHead className="hidden lg:table-cell">Finished</TableHead>
           <TableHead className="hidden sm:table-cell">Duration</TableHead>
+          <TableHead>Actions</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -76,6 +80,15 @@ export function JobsTable({ jobs, onSelect, showTarget = true }: JobsTableProps)
             </TableCell>
             <TableCell className="hidden whitespace-nowrap sm:table-cell">
               {formatJobDuration(job)}
+            </TableCell>
+            <TableCell>
+              {isRetryableJob(job.status) ? (
+                <RetryJobButton
+                  jobId={job.id}
+                  ariaLabel={`Retry ${JOB_TYPE_LABEL[job.type]} job`}
+                  onRetried={onRetried}
+                />
+              ) : null}
             </TableCell>
           </TableRow>
         ))}

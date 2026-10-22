@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   ACTOR_TYPES,
+  BULK_JOB_TYPES,
   JOB_STATUSES,
   JOB_TYPES,
   OS_FAMILIES,
@@ -197,3 +198,18 @@ export const createJobSchema = z.object({
   type: z.enum(JOB_TYPES),
   params: z.record(z.string().max(64), z.unknown()).nullable().optional(),
 });
+
+/** Upper bound on the number of targets a single bulk dispatch may address. */
+export const BULK_MAX_TARGETS = 500;
+
+/**
+ * Body of `POST /api/jobs/bulk`. `targetIds` is optional: omitting it targets
+ * every eligible target in the fleet. Ids are validated as cuids (the format
+ * Prisma generates) and de-duplicated, so a repeated id never creates two jobs.
+ */
+export const bulkCreateJobSchema = z.object({
+  type: z.enum(BULK_JOB_TYPES),
+  targetIds: z.array(z.string().cuid()).max(BULK_MAX_TARGETS).optional(),
+});
+
+export type BulkCreateJobInput = z.infer<typeof bulkCreateJobSchema>;
