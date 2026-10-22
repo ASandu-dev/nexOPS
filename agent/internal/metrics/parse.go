@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -128,6 +130,199 @@ func parseMeminfo(r io.Reader) (Meminfo, error) {
 	return m, nil
 }
 
+// parseCPUModel extracts a human-readable model name from /proc/cpuinfo.
+// x86 hosts use "model name"; ARM hosts often expose "Model" or "Hardware"
+// instead. It never fails: unparseable/missing content yields "unknown".
+func parseCPUModel(r io.Reader) string {
+	values := map[string]string{}
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		line := sc.Text()
+		colon := strings.IndexByte(line, ':')
+		if colon <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:colon])
+		val := strings.TrimSpace(line[colon+1:])
+		if val == "" {
+			continue
+		}
+		if _, ok := values[key]; !ok {
+			values[key] = val
+		}
+	}
+	// Priority: x86 model, then the ARM/dts model, then hardware fallbacks.
+	for _, key := range []string{"model name", "Model", "Hardware", "Processor"} {
+		if v := values[key]; v != "" {
+			return v
+		}
+	}
+	return "unknown"
+}
+
+// diskCounters are cumulative byte counters for one whole block device.
+type diskCounters struct {
+	read  uint64
+	write uint64
+}
+
+// diskSectorSize is the fixed block size used by /proc/diskstats sector
+// counters (Linux always reports 512-byte sectors, independent of the device's
+// physical block size).
+const diskSectorSize = 512
+
+// parseDiskstats parses /proc/diskstats, keeping whole physical devices only.
+// After the major/minor/device columns, sectors-read is the 3rd field and
+// sectors-written the 7th (absolute 0-based indices 5 and 9).
+func parseDiskstats(r io.Reader) (map[string]diskCounters, error) {
+	out := map[string]diskCounters{}
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
+		if len(fields) < 10 {
+			continue
+		}
+		device := fields[2]
+		if !isWholeDisk(device) {
+			continue
+		}
+		sectorsRead, err := strconv.ParseUint(fields[5], 10, 64)
+		if err != nil {
+			continue
+		}
+		sectorsWritten, err := strconv.ParseUint(fields[9], 10, 64)
+		if err != nil {
+			continue
+		}
+		out[device] = diskCounters{
+			read:  sectorsRead * diskSectorSize,
+			write: sectorsWritten * diskSectorSize,
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// isWholeDisk reports whether a /proc/diskstats device name is a whole
+// physical disk rather than a partition or virtual/pseudo device.
+func isWholeDisk(name string) bool {
+	if strings.HasPrefix(name, "loop") || strings.HasPrefix(name, "ram") ||
+		strings.HasPrefix(name, "sr") || strings.HasPrefix(name, "dm-") {
+		return false
+	}
+	if strings.HasPrefix(name, "nvme") {
+		return isWholeNVMe(name)
+	}
+	if strings.HasPrefix(name, "mmcblk") {
+		return allDigits(name[len("mmcblk"):])
+	}
+	for _, prefix := range []string{"xvd", "sd", "vd", "hd"} {
+		if strings.HasPrefix(name, prefix) {
+			return allLetters(name[len(prefix):])
+		}
+	}
+	return false
+}
+
+// isWholeNVMe matches whole NVMe namespaces (nvme*n<digits>, e.g. nvme0n1 and
+// nvme0c0n1) and rejects partitions such as nvme0n1p1.
+func isWholeNVMe(name string) bool {
+	rest := name[len("nvme"):]
+	n := strings.LastIndexByte(rest, 'n')
+	if n <= 0 || n == len(rest)-1 {
+		return false
+	}
+	return allDigits(rest[n+1:])
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func allLetters(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < 'a' || r > 'z' {
+			return false
+		}
+	}
+	return true
+}
+
+// diskRate computes bytes/sec for one device between two samples. A counter
+// that decreased (device reset/recreated) yields 0, never a negative spike.
+func diskRate(prev diskCounters, cur diskCounters, elapsedSec float64) (readRate, writeRate *float64) {
+	if elapsedSec <= 0 {
+		return nil, nil
+	}
+	read := 0.0
+	if cur.read >= prev.read {
+		read = float64(cur.read-prev.read) / elapsedSec
+	}
+	write := 0.0
+	if cur.write >= prev.write {
+		write = float64(cur.write-prev.write) / elapsedSec
+	}
+	return &read, &write
+}
+
+// parseOperstate normalises /sys/class/net/<iface>/operstate to the wire
+// contract values up/down/unknown.
+func parseOperstate(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "up":
+		return "up"
+	case "down":
+		return "down"
+	default:
+		return "unknown"
+	}
+}
+
+// formatIPAddresses converts net.Addr values to CIDR-less IP strings, keeping
+// both IPv4 and IPv6, deduplicated and deterministically sorted.
+func formatIPAddresses(addrs []net.Addr) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		if addr == nil {
+			continue
+		}
+		var ip net.IP
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		default:
+			continue
+		}
+		if ip == nil {
+			continue
+		}
+		s := ip.String()
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // cpuSample is the aggregate "cpu " row of /proc/stat: total jiffies across
 // all buckets and idle jiffies (idle + iowait, which the kernel folds into
 // idle accounting).
@@ -208,7 +403,8 @@ type netCounters struct {
 }
 
 // parseNetDev parses /proc/net/dev (rx bytes in field 0 after the colon, tx
-// bytes in field 8). The loopback interface is included here; callers filter.
+// bytes in field 8). Loopback is parsed like any other interface so its
+// operstate and addresses are reported honestly.
 func parseNetDev(r io.Reader) (map[string]netCounters, error) {
 	out := map[string]netCounters{}
 	sc := bufio.NewScanner(r)

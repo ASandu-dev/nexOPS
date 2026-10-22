@@ -34,6 +34,17 @@ export const netDtoSchema = z.object({
   txBytes: byteCount,
   rxRateBps: rate,
   txRateBps: rate,
+  // Defaults keep snapshots captured by older agents readable.
+  ips: z.array(z.string().min(1).max(64)).max(64).default([]),
+  operstate: z.string().min(1).max(32).default("unknown"),
+});
+
+export const diskIOSchema = z.object({
+  device: z.string().min(1).max(64),
+  readBytes: byteCount,
+  writeBytes: byteCount,
+  readRateBps: rate.nullable().default(null),
+  writeRateBps: rate.nullable().default(null),
 });
 
 export const serviceDtoSchema = z.object({
@@ -49,6 +60,8 @@ export const pkgUpdatesSchema = z.object({
 /** Mirrors `HeartbeatRequest` in src/lib/types.ts. */
 export const heartbeatSchema = z.object({
   capturedAt: isoDateTimeSchema,
+  // Newer fields default so heartbeats from older deployed agents still parse.
+  cpuModel: z.string().min(1).max(256).default("unknown"),
   cpuPct: z.number().min(0).max(100).nullable(),
   cores: z.number().int().nonnegative().nullable(),
   load1: z.number().nonnegative().nullable(),
@@ -57,8 +70,11 @@ export const heartbeatSchema = z.object({
   memTotalBytes: byteCount,
   memUsedBytes: byteCount,
   memAvailableBytes: byteCount,
+  swapTotalBytes: byteCount.nullable().default(null),
   swapUsedBytes: byteCount.nullable(),
+  osPrettyName: z.string().max(256).default(""),
   disks: z.array(diskDtoSchema).max(64),
+  diskIO: z.array(diskIOSchema).max(256).default([]),
   net: z.array(netDtoSchema).max(64),
   uptimeSec: byteCount.nullable(),
   bootTime: isoDateTimeSchema.nullable(),
@@ -67,6 +83,7 @@ export const heartbeatSchema = z.object({
   agentVersion: z.string().min(1).max(64),
   services: z.array(serviceDtoSchema).max(256),
   pkgUpdates: pkgUpdatesSchema.nullable(),
+  collectionErrors: z.array(z.string().min(1).max(512)).max(64).default([]),
   activeJobIds: z.array(z.string().min(1).max(64)).optional(),
 });
 

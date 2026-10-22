@@ -11,6 +11,8 @@
  * string when a value can exceed Number.MAX_SAFE_INTEGER — see toBigIntSafe).
  */
 
+import type { ResourceWarning } from "@/lib/server/warnings";
+
 export const TARGET_STATUSES = [
   "PENDING_ENROLMENT",
   "ONLINE",
@@ -148,6 +150,23 @@ export interface NetInterfaceDto {
   txBytes: number;
   rxRateBps: number;
   txRateBps: number;
+  /** IPv4/IPv6 addresses without CIDR prefixes. */
+  ips: string[];
+  /** Kernel operstate normalised to `up` | `down` | `unknown`. */
+  operstate: string;
+}
+
+export interface DiskIOStatDto {
+  /** Whole physical block device, e.g. `sda`, `nvme0n1`. */
+  device: string;
+  /** Cumulative bytes read since boot. */
+  readBytes: number;
+  /** Cumulative bytes written since boot. */
+  writeBytes: number;
+  /** Null on the first sample (no baseline). */
+  readRateBps: number | null;
+  /** Null on the first sample (no baseline). */
+  writeRateBps: number | null;
 }
 
 export interface ServiceStateDto {
@@ -164,6 +183,7 @@ export interface TelemetryDto {
   id: string;
   targetId: string;
   capturedAt: IsoDateTime;
+  cpuModel: string | null;
   cpuPct: number | null;
   cores: number | null;
   load1: number | null;
@@ -172,7 +192,9 @@ export interface TelemetryDto {
   memTotalBytes: number;
   memUsedBytes: number;
   memAvailableBytes: number;
+  swapTotalBytes: number | null;
   swapUsedBytes: number | null;
+  osPrettyName: string | null;
   diskUsedBytes: number | null;
   diskTotalBytes: number | null;
   netRxRateBps: number | null;
@@ -183,9 +205,11 @@ export interface TelemetryDto {
   hostname: string | null;
   agentVersion: string | null;
   disks: DiskUsageDto[];
+  diskIO: DiskIOStatDto[];
   net: NetInterfaceDto[];
   services: ServiceStateDto[];
   pkgUpdates: PkgUpdateSummaryDto | null;
+  collectionErrors: string[];
 }
 
 /** Downsampled series returned by `GET /api/targets/[id]/telemetry`. */
@@ -212,6 +236,8 @@ export interface TelemetrySeriesDto {
   points: TelemetryPointDto[];
   /** Most recent full snapshot (raw disks/net/services/pkgUpdates); null when the target never reported. */
   latest: TelemetryDto | null;
+  /** Resource-pressure warnings derived from `latest` at read time (never persisted). */
+  warnings: ResourceWarning[];
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +341,7 @@ export interface AgentEnrolResponse {
 
 export interface HeartbeatRequest {
   capturedAt: IsoDateTime;
+  cpuModel: string;
   cpuPct: number | null;
   cores: number | null;
   load1: number | null;
@@ -323,8 +350,11 @@ export interface HeartbeatRequest {
   memTotalBytes: number;
   memUsedBytes: number;
   memAvailableBytes: number;
+  swapTotalBytes: number | null;
   swapUsedBytes: number | null;
+  osPrettyName: string;
   disks: DiskUsageDto[];
+  diskIO: DiskIOStatDto[];
   net: NetInterfaceDto[];
   uptimeSec: number | null;
   bootTime: IsoDateTime | null;
@@ -333,6 +363,8 @@ export interface HeartbeatRequest {
   agentVersion: string;
   services: ServiceStateDto[];
   pkgUpdates: PkgUpdateSummaryDto | null;
+  /** Failed collectors as `<name>: <error>`; omitted by the agent when empty. */
+  collectionErrors?: string[];
   /** Jobs the agent is currently running or has accepted but not finished. */
   activeJobIds?: string[];
 }

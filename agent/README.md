@@ -75,6 +75,21 @@ Telemetry: CPU (two-sample `/proc/stat` delta), cores, loadavg, memory
 only), per-interface network counters + rates, uptime/boot time, kernel,
 hostname, watched systemd unit states, and apt update summary (cached 10min).
 
+Additional telemetry fields:
+
+| Field | Type | Source / notes |
+| --- | --- | --- |
+| `cpuModel` | string | `/proc/cpuinfo` (`model name`, then `Model`/`Hardware`); `"unknown"` when unparseable |
+| `swapTotalBytes` | number \| null | `/proc/meminfo` `SwapTotal`; null when meminfo could not be read |
+| `osPrettyName` | string | `PRETTY_NAME` from `/etc/os-release` (falling back to `/usr/lib/os-release`); empty when absent |
+| `net[].ips` | string[] | IPv4 + IPv6 addresses from `net.Interface.Addrs()`, CIDR prefixes stripped |
+| `net[].operstate` | string | `/sys/class/net/<iface>/operstate`, normalised to `up`, `down` or `unknown` |
+| `diskIO[]` | object[] | Whole physical devices from `/proc/diskstats` (`device`, `readBytes`, `writeBytes`, `readRateBps`, `writeRateBps`); rates are null on the first sample |
+| `collectionErrors` | string[] | `<collector>: <error>` entries for failed collectors; omitted when empty |
+
+Collection is best-effort: a failing collector is listed in `collectionErrors`
+while the rest of the heartbeat is still sent (failed metrics stay null/empty).
+
 ## Security model
 
 - Credential and private key live on the target only (mode 0600); the control

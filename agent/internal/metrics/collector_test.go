@@ -2,12 +2,30 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nexops/agent/internal/protocol"
 )
+
+func TestCollectionErrorsAggregate(t *testing.T) {
+	var errs collectionErrors
+	errs.add("cpu", errors.New("boom"))
+	errs.add("net", nil) // successful collectors add nothing
+	errs.add("diskIO", errors.New("permission denied"))
+
+	want := []string{"cpu: boom", "diskIO: permission denied"}
+	if len(errs) != len(want) {
+		t.Fatalf("errors = %v, want %v", errs, want)
+	}
+	for i := range want {
+		if errs[i] != want[i] {
+			t.Fatalf("errors[%d] = %q, want %q", i, errs[i], want[i])
+		}
+	}
+}
 
 // TestCollectReadsPkgCacheWithoutBlocking proves package measurement never runs
 // on the beat path: Collect returns while a measurement is still in flight and

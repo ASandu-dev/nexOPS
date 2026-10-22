@@ -91,6 +91,38 @@ export function MemoryChart({ points }: ChartProps) {
   );
 }
 
+export function DiskUsageChart({ points }: ChartProps) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <AreaChart data={points as TelemetryPointDto[]} margin={{ top: 8, right: 12, bottom: 0, left: -12 }}>
+        <defs>
+          <linearGradient id="diskFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--warning)" stopOpacity={0.4} />
+            <stop offset="100%" stopColor="var(--warning)" stopOpacity={0.05} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid stroke={GRID_STROKE} strokeDasharray="3 3" vertical={false} />
+        <XAxis dataKey="capturedAt" tickFormatter={formatTick} tick={AXIS_STYLE} minTickGap={32} />
+        <YAxis domain={[0, 100]} tick={AXIS_STYLE} width={40} unit="%" />
+        <Tooltip
+          labelFormatter={(value) => new Date(String(value)).toLocaleString()}
+          formatter={(value) => [`${Number(value).toFixed(1)}%`, "Disk"]}
+          contentStyle={{ fontSize: 12 }}
+        />
+        <Area
+          type="monotone"
+          dataKey="diskUsedPct"
+          name="Disk"
+          stroke="var(--warning)"
+          strokeWidth={2}
+          fill="url(#diskFill)"
+          connectNulls
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
 export function NetworkChart({ points }: ChartProps) {
   return (
     <ResponsiveContainer width="100%" height="100%">

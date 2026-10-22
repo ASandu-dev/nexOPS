@@ -4,17 +4,24 @@ import { AlertTriangle, Info } from "lucide-react";
 import type { TargetDetailDto, TelemetryDto } from "@/lib/types";
 import { formatBytes, formatDuration, formatPercent } from "@/lib/format";
 import { isOlderThan, percentOf } from "@/lib/display";
+import { cn } from "@/lib/cn";
 import { Badge, Card, CardContent, CardHeader, CardTitle, Meter } from "@/components/ui";
 import { RelativeTime } from "@/components/common/relative-time";
+import {
+  ResourceWarningSummary,
+  type ResourceWarning,
+} from "@/components/targets/resource-warnings";
 
 const TELEMETRY_STALE_MS = 2 * 60 * 1000;
 
 export interface SummaryTabProps {
   target: TargetDetailDto;
   latest: TelemetryDto | null;
+  /** Resource-pressure warnings derived from the latest telemetry snapshot. */
+  warnings: readonly ResourceWarning[];
 }
 
-export function SummaryTab({ target, latest }: SummaryTabProps) {
+export function SummaryTab({ target, latest, warnings }: SummaryTabProps) {
   const telemetryStale = isOlderThan(target.lastTelemetryAt, TELEMETRY_STALE_MS);
   const memPct = latest ? percentOf(latest.memUsedBytes, latest.memTotalBytes) : null;
   const diskPct = latest ? percentOf(latest.diskUsedBytes, latest.diskTotalBytes) : null;
@@ -54,6 +61,7 @@ export function SummaryTab({ target, latest }: SummaryTabProps) {
                 {target.os}
                 {target.osVersion ? ` ${target.osVersion}` : ""}
               </Field>
+              <Field label="CPU">{latest?.cpuModel ?? "—"}</Field>
               <Field label="Architecture">{target.arch ?? "—"}</Field>
               <Field label="Agent version">{target.agent?.agentVersion ?? "—"}</Field>
               <Field label="Last contact">
@@ -76,6 +84,9 @@ export function SummaryTab({ target, latest }: SummaryTabProps) {
               </Field>
               <Field label="Enrolled">
                 <RelativeTime value={target.agent?.enrolledAt ?? null} />
+              </Field>
+              <Field label="Resource warnings" className="col-span-2">
+                <ResourceWarningSummary warnings={warnings} />
               </Field>
             </dl>
           </CardContent>
@@ -121,9 +132,17 @@ export function SummaryTab({ target, latest }: SummaryTabProps) {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  className,
+  children,
+}: {
+  label: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="flex flex-col gap-0.5">
+    <div className={cn("flex flex-col gap-0.5", className)}>
       <dt className="text-xs font-medium uppercase tracking-wide text-on-surface-variant">{label}</dt>
       <dd className="text-on-surface">{children}</dd>
     </div>

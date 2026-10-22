@@ -135,15 +135,19 @@ in `src/lib/types.ts`):
 ```json
 {
   "capturedAt": "2026-01-01T12:00:00Z",
+  "cpuModel": "Intel(R) Xeon(R) CPU E5-2670 v3 @ 2.30GHz",
   "cpuPct": 12.5,
   "cores": 4,
   "load1": 0.4, "load5": 0.3, "load15": 0.2,
   "memTotalBytes": 8589934592,
   "memUsedBytes": 3221225472,
   "memAvailableBytes": 5368709120,
+  "swapTotalBytes": 2147483648,
   "swapUsedBytes": 0,
+  "osPrettyName": "Ubuntu 24.04.1 LTS",
   "disks": [{ "mount": "/", "fsType": "ext4", "totalBytes": 100, "usedBytes": 40, "inodesTotal": 1000, "inodesUsed": 100 }],
-  "net": [{ "name": "eth0", "rxBytes": 1, "txBytes": 2, "rxRateBps": 0.0, "txRateBps": 0.0 }],
+  "diskIO": [{ "device": "sda", "readBytes": 1048576, "writeBytes": 2097152, "readRateBps": 512, "writeRateBps": 1024 }],
+  "net": [{ "name": "eth0", "rxBytes": 1, "txBytes": 2, "rxRateBps": 0.0, "txRateBps": 0.0, "ips": ["10.0.0.5", "2001:db8::5"], "operstate": "up" }],
   "uptimeSec": 123456,
   "bootTime": "2025-12-01T00:00:00Z",
   "kernel": "6.8.0-45-generic",
@@ -151,12 +155,24 @@ in `src/lib/types.ts`):
   "agentVersion": "0.1.0",
   "services": [{ "name": "nginx", "state": "active" }],
   "pkgUpdates": { "availableCount": 3, "rebootRequired": false },
+  "collectionErrors": ["meminfo: permission denied"],
   "activeJobIds": ["job_01H..."]
 }
 ```
 
 `memAvailableBytes` **must** come from Linux `/proc/meminfo` `MemAvailable`
 (not `MemFree`).
+
+`cpuModel` comes from `/proc/cpuinfo` (`model name`, then ARM `Model`/
+`Hardware`; `"unknown"` when unparseable). `swapTotalBytes` comes from
+`/proc/meminfo` `SwapTotal`. `osPrettyName` is `PRETTY_NAME` from os-release
+(empty when absent). `diskIO` covers whole physical devices from
+`/proc/diskstats` (sectors × 512); its rates are `null` on the first sample and
+on counter resets never go negative. `net[].ips` lists IPv4/IPv6 addresses
+without CIDR prefixes and `net[].operstate` is the kernel value normalised to
+`up`/`down`/`unknown`. `collectionErrors` is optional and omitted when empty:
+each entry is `<collector>: <error>` and the beat still carries every other
+field (failed metrics stay `null`/empty).
 
 The agent heartbeats **immediately on start**, before the first interval, so a
 freshly enrolled target reaches `ONLINE` without waiting a full tick.
@@ -169,6 +185,27 @@ honestly means "not measured within the last TTL".
 `lastTelemetryAt` only advances for heartbeats carrying usable telemetry
 (`memTotalBytes > 0`, which the agent reports only when it actually sampled
 `/proc/meminfo`); a heartbeat without usable telemetry is connectivity-only.
+
+### Resource warnings (derived at read time, not persisted)
+
+`GET /api/targets/[id]/telemetry` returns `warnings: ResourceWarning[]`
+alongside the series and latest DTO. They are computed by
+`deriveResourceWarnings(latest)` from the latest snapshot each time the
+endpoint is read, so threshold changes apply retroactively and no warning state
+is stored in the database.
+
+| Code | Severity | Threshold |
+| --- | --- | --- |
+| `cpu_high` | warning | `cpuPct > 90` |
+| `mem_low` | warning | `memAvailableBytes / memTotalBytes < 0.10` |
+| `swap_high` | warning | `swapTotalBytes > 0` and `swapUsedBytes / swapTotalBytes > 0.5` |
+| `disk_critical` | critical | any filesystem `usedBytes / totalBytes > 0.95` |
+| `disk_high` | warning | any filesystem `usedBytes / totalBytes > 0.90` (and not critical) |
+| `metrics_degraded` | warning | `collectionErrors.length > 0` |
+
+A null snapshot yields an empty list. Messages name the offending value (and
+the mount path for disk warnings); results are ordered by warning code for
+stable rendering.
 
 `activeJobIds` (optional) lists the jobs the agent is currently running **or**
 has accepted but not yet finished. The agent keeps heartbeating on its ticker
@@ -284,7 +321,7 @@ All request/response bodies are Zod-validated against the DTOs in
 | `GET` | `/api/targets/[id]` | `TargetDto`. |
 | `PATCH` | `/api/targets/[id]` | Body `{ name?, hostnameOverride?, labels? }` → `TargetDto`. Audited. |
 | `DELETE` | `/api/targets/[id]` | Revokes credential (`credentialHash=null`, `revokedAt=now`), cancels `QUEUED` jobs, sets `deletedAt`. Audited. |
-| `GET` | `/api/targets/[id]/telemetry` | Query `range=1h\|6h\|24h\|7d` → `TelemetrySeriesDto` (downsampled aggregates). |
+| `GET` | `/api/targets/[id]/telemetry` | Query `range=1h\|6h\|24h\|7d` → `TelemetrySeriesDto` (downsampled aggregates, latest snapshot, read-time resource warnings). |
 | `GET` | `/api/targets/[id]/jobs` | `Paginated<JobDto>`. |
 | `GET` | `/api/jobs` | Query `status`, `targetId`, `page` → `Paginated<JobDto>`. |
 | `GET` | `/api/jobs/[id]` | `JobDto`. |

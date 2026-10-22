@@ -77,13 +77,28 @@ type DiskUsage struct {
 }
 
 // NetInterface mirrors NetInterfaceDto. Rate fields are 0.0 on the first
-// sample (no previous counter) or after a counter reset.
+// sample (no previous counter) or after a counter reset. IPs are address
+// strings without CIDR prefixes; Operstate is the kernel's
+// /sys/class/net/<iface>/operstate value, normalised to up/down/unknown.
 type NetInterface struct {
-	Name      string  `json:"name"`
-	RxBytes   int64   `json:"rxBytes"`
-	TxBytes   int64   `json:"txBytes"`
-	RxRateBps float64 `json:"rxRateBps"`
-	TxRateBps float64 `json:"txRateBps"`
+	Name      string   `json:"name"`
+	RxBytes   int64    `json:"rxBytes"`
+	TxBytes   int64    `json:"txBytes"`
+	RxRateBps float64  `json:"rxRateBps"`
+	TxRateBps float64  `json:"txRateBps"`
+	IPs       []string `json:"ips"`
+	Operstate string   `json:"operstate"`
+}
+
+// DiskIOStat mirrors DiskIOStatDto. ReadBytes/WriteBytes are cumulative
+// /proc/diskstats sector counters × 512. Rates are null on the first sample
+// (no previous counter); a counter reset yields 0, never a negative spike.
+type DiskIOStat struct {
+	Device       string   `json:"device"`
+	ReadBytes    int64    `json:"readBytes"`
+	WriteBytes   int64    `json:"writeBytes"`
+	ReadRateBps  *float64 `json:"readRateBps"`
+	WriteRateBps *float64 `json:"writeRateBps"`
 }
 
 // ServiceState mirrors ServiceStateDto; state is a systemd ActiveState value
@@ -106,6 +121,7 @@ type PkgUpdateSummary struct {
 // as null and fail backend validation.
 type HeartbeatRequest struct {
 	CapturedAt        string            `json:"capturedAt"`
+	CPUModel          string            `json:"cpuModel"`
 	CPUPct            *float64          `json:"cpuPct"`
 	Cores             *int              `json:"cores"`
 	Load1             *float64          `json:"load1"`
@@ -114,8 +130,11 @@ type HeartbeatRequest struct {
 	MemTotalBytes     int64             `json:"memTotalBytes"`
 	MemUsedBytes      int64             `json:"memUsedBytes"`
 	MemAvailableBytes int64             `json:"memAvailableBytes"`
+	SwapTotalBytes    *int64            `json:"swapTotalBytes"`
 	SwapUsedBytes     *int64            `json:"swapUsedBytes"`
+	OSPrettyName      string            `json:"osPrettyName"`
 	Disks             []DiskUsage       `json:"disks"`
+	DiskIO            []DiskIOStat      `json:"diskIO"`
 	Net               []NetInterface    `json:"net"`
 	UptimeSec         *int64            `json:"uptimeSec"`
 	BootTime          *string           `json:"bootTime"`
@@ -124,6 +143,7 @@ type HeartbeatRequest struct {
 	AgentVersion      string            `json:"agentVersion"`
 	Services          []ServiceState    `json:"services"`
 	PkgUpdates        *PkgUpdateSummary `json:"pkgUpdates"`
+	CollectionErrors  []string          `json:"collectionErrors,omitempty"`
 	ActiveJobIds      []string          `json:"activeJobIds,omitempty"`
 }
 

@@ -14,6 +14,7 @@ import {
   CardTitle,
   EmptyState,
   ErrorState,
+  Meter,
   Skeleton,
   Table,
   TableBody,
@@ -23,6 +24,8 @@ import {
   TableRow,
 } from "@/components/ui";
 import { FilterChips } from "@/components/common/filter-chips";
+import { ResourceWarnings } from "@/components/targets/resource-warnings";
+import { CollectionErrorsBanner } from "@/components/targets/collection-errors-banner";
 
 const CpuChart = dynamic(
   () => import("@/components/charts/telemetry-charts").then((module) => module.CpuChart),
@@ -40,6 +43,10 @@ const LoadChart = dynamic(
   () => import("@/components/charts/telemetry-charts").then((module) => module.LoadChart),
   { ssr: false, loading: () => <ChartSkeleton /> },
 );
+const DiskUsageChart = dynamic(
+  () => import("@/components/charts/telemetry-charts").then((module) => module.DiskUsageChart),
+  { ssr: false, loading: () => <ChartSkeleton /> },
+);
 
 const RANGE_OPTIONS = TELEMETRY_RANGES.map((range) => ({ value: range, label: range }));
 
@@ -52,6 +59,10 @@ export interface MonitoringTabProps {
   onRefresh: () => void;
 }
 
+function isPresent(value: number | null | undefined): boolean {
+  return value !== undefined && value !== null;
+}
+
 export function MonitoringTab({
   series,
   loading,
@@ -62,7 +73,15 @@ export function MonitoringTab({
 }: MonitoringTabProps) {
   const points = series?.points ?? [];
   const latest = series?.latest ?? null;
-  const hasLoadSeries = points.some((point) => point.load1 !== undefined && point.load1 !== null);
+  const hasLoadSeries = points.some(
+    (point) => isPresent(point.load1) || isPresent(point.load5) || isPresent(point.load15),
+  );
+  const hasDiskSeries = points.some((point) => isPresent(point.diskUsedPct));
+  const diskUsed = latest?.diskUsedBytes ?? null;
+  const diskTotal = latest?.diskTotalBytes ?? null;
+  const swapUsed = latest?.swapUsedBytes ?? null;
+  const swapTotal = latest?.swapTotalBytes ?? null;
+  const swapPct = percentOf(swapUsed, swapTotal);
 
   return (
     <div className="flex flex-col gap-5">
@@ -75,6 +94,13 @@ export function MonitoringTab({
           if (selected) onRangeChange(selected as TelemetryRange);
         }}
       />
+
+      {series === null ? null : (
+        <>
+          <ResourceWarnings warnings={series.warnings} />
+          <CollectionErrorsBanner errors={series.latest?.collectionErrors ?? []} />
+        </>
+      )}
 
       {loading ? (
         <Skeleton className="h-72 w-full" />
@@ -109,6 +135,40 @@ export function MonitoringTab({
                 </div>
               )}
             </ChartCard>
+            <ChartCard title="Disk usage">
+              {hasDiskSeries ? (
+                <DiskUsageChart points={points} />
+              ) : (
+                <div className="flex h-full items-center">
+                  <Meter
+                    label="Disk"
+                    value={percentOf(diskUsed, diskTotal)}
+                    detail={
+                      diskUsed !== null && diskTotal !== null
+                        ? `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`
+                        : "—"
+                    }
+                    className="w-full"
+                  />
+                </div>
+              )}
+            </ChartCard>
+            <Card className="flex flex-col">
+              <CardHeader>
+                <CardTitle>Swap usage</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col justify-center">
+                {swapPct === null || swapUsed === null || swapTotal === null ? (
+                  <p className="text-sm text-on-surface-variant">No swap data reported.</p>
+                ) : (
+                  <Meter
+                    label="Swap"
+                    value={swapPct}
+                    detail={`${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}`}
+                  />
+                )}
+              </CardContent>
+            </Card>
           </div>
 
           <Card>

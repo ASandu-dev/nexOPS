@@ -2,6 +2,8 @@ package metrics
 
 import (
 	"math"
+	"net"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -321,5 +323,181 @@ func TestParseUptime(t *testing.T) {
 	}
 	if _, err := parseUptime(""); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestParseCPUModel(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "amd64 model name",
+			in: `processor : 0
+vendor_id : GenuineIntel
+model name : Intel(R) Xeon(R) CPU E5-2670 v3 @ 2.30GHz
+flags : fpu
+`,
+			want: "Intel(R) Xeon(R) CPU E5-2670 v3 @ 2.30GHz",
+		},
+		{
+			name: "arm model preferred over hardware",
+			in: `processor : 0
+Hardware : BCM2711
+Model : Raspberry Pi 4 Model B Rev 1.4
+`,
+			want: "Raspberry Pi 4 Model B Rev 1.4",
+		},
+		{
+			name: "arm hardware fallback",
+			in: `processor : 0
+Hardware : BCM2835
+`,
+			want: "BCM2835",
+		},
+		{
+			name: "missing",
+			in:   "processor : 0\n",
+			want: "unknown",
+		},
+		{
+			name: "empty",
+			want: "unknown",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseCPUModel(strings.NewReader(tc.in)); got != tc.want {
+				t.Fatalf("parseCPUModel = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseMeminfoSwapTotal(t *testing.T) {
+	m, err := parseMeminfo(strings.NewReader(meminfoWithAvailable))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.SwapTotal != 2097148*1024 {
+		t.Fatalf("swap total = %d, want %d", m.SwapTotal, 2097148*1024)
+	}
+}
+
+const diskstatsSample = `   8       0 sda 100 0 2048 10 200 0 4096 20 0 0 0 0 0 0
+   8       1 sda1 10 0 512 1 20 0 512 2 0 0 0 0 0 0
+   8      16 sdb 5 0 1024 5 6 0 2048 6 0 0 0 0 0 0
+ 259       0 nvme0n1 7 0 3072 7 8 0 1024 8 0 0 0 0 0 0
+ 259       1 nvme0n1p1 7 0 4000 7 8 0 5000 8 0 0 0 0 0 0
+ 259       2 nvme0c0n1 2 0 1024 2 3 0 2048 3 0 0 0 0 0 0
+ 259       3 nvme0c0n1p1 2 0 3000 2 3 0 3500 3 0 0 0 0 0 0
+ 179       0 mmcblk0 9 0 2048 9 10 0 4096 10 0 0 0 0 0 0
+ 179       1 mmcblk0p1 9 0 3000 9 10 0 3500 10 0 0 0 0 0 0
+   7       0 loop0 1 0 8 0 2 0 16 0 0 0 0 0 0 0
+   1       0 ram0 1 0 8 0 2 0 16 0 0 0 0 0 0 0
+  11       0 sr0 1 0 8 0 2 0 16 0 0 0 0 0 0 0
+ 253       0 dm-0 1 0 8 0 2 0 16 0 0 0 0 0 0 0
+ 202       0 xvda 3 0 512 3 4 0 1024 4 0 0 0 0 0 0
+ 252       0 vda 3 0 512 3 4 0 1024 4 0 0 0 0 0 0
+   3       0 hda 3 0 512 3 4 0 1024 4 0 0 0 0 0 0
+`
+
+func TestParseDiskstatsFiltersAndConvertsSectors(t *testing.T) {
+	stats, err := parseDiskstats(strings.NewReader(diskstatsSample))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDevices := []string{"hda", "mmcblk0", "nvme0c0n1", "nvme0n1", "sda", "sdb", "vda", "xvda"}
+	if len(stats) != len(wantDevices) {
+		t.Fatalf("devices = %v, want %v", stats, wantDevices)
+	}
+	for _, device := range wantDevices {
+		if _, ok := stats[device]; !ok {
+			t.Errorf("missing whole device %q", device)
+		}
+	}
+	for _, device := range []string{"sda1", "nvme0n1p1", "nvme0c0n1p1", "mmcblk0p1", "loop0", "ram0", "sr0", "dm-0"} {
+		if _, ok := stats[device]; ok {
+			t.Errorf("partition/pseudo device %q should be filtered", device)
+		}
+	}
+	if got := stats["sda"]; got.read != 2048*512 || got.write != 4096*512 {
+		t.Fatalf("sda counters = %+v", got)
+	}
+	if got := stats["nvme0n1"]; got.read != 3072*512 || got.write != 1024*512 {
+		t.Fatalf("nvme0n1 counters = %+v", got)
+	}
+}
+
+func TestDiskRateFromTwoSamples(t *testing.T) {
+	prev := diskCounters{read: 1024, write: 2048}
+	cur := diskCounters{read: 5120, write: 6144}
+
+	read, write := diskRate(prev, cur, 2)
+	if read == nil || write == nil {
+		t.Fatal("expected rates for a valid previous sample")
+	}
+	if *read != 2048 || *write != 2048 {
+		t.Fatalf("rates = %v/%v, want 2048/2048", *read, *write)
+	}
+
+	// Counter reset: never negative.
+	reset := diskCounters{read: 100, write: 100}
+	read, write = diskRate(prev, reset, 1)
+	if read == nil || write == nil || *read != 0 || *write != 0 {
+		t.Fatalf("reset rates = %v/%v, want 0/0", read, write)
+	}
+
+	// No elapsed time (first sample): no rate at all.
+	if read, write = diskRate(prev, cur, 0); read != nil || write != nil {
+		t.Fatalf("zero elapsed rates = %v/%v, want nil/nil", read, write)
+	}
+}
+
+func TestParseCPUMissingOsReleaseKey(t *testing.T) {
+	vals, err := parseOsRelease(strings.NewReader("NAME=\"Debian\"\nID=debian\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vals["PRETTY_NAME"] != "" {
+		t.Fatalf("PRETTY_NAME = %q, want empty", vals["PRETTY_NAME"])
+	}
+}
+
+func TestParseOperstate(t *testing.T) {
+	cases := map[string]string{
+		"up\n":       "up",
+		"down\n":     "down",
+		" unknown\n": "unknown",
+		"dormant\n":  "unknown",
+		"":           "unknown",
+		"UP\n":       "up",
+	}
+	for in, want := range cases {
+		if got := parseOperstate(in); got != want {
+			t.Errorf("parseOperstate(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestFormatIPAddresses(t *testing.T) {
+	v4ip, _, _ := net.ParseCIDR("192.0.2.10/24")
+	v6ip, _, _ := net.ParseCIDR("2001:db8::5/64")
+	v4net := &net.IPNet{IP: v4ip, Mask: net.CIDRMask(24, 32)}
+	v6net := &net.IPNet{IP: v6ip, Mask: net.CIDRMask(64, 128)}
+	addrs := []net.Addr{
+		v4net,
+		v6net,
+		&net.IPAddr{IP: net.ParseIP("198.51.100.7")},
+		v4net, // duplicate
+	}
+	got := formatIPAddresses(addrs)
+	want := []string{"192.0.2.10", "198.51.100.7", "2001:db8::5"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("formatIPAddresses = %v, want %v", got, want)
+	}
+	if got := formatIPAddresses(nil); got == nil || len(got) != 0 {
+		t.Fatalf("nil addrs should produce a non-nil empty slice, got %v", got)
 	}
 }
