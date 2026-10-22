@@ -32,6 +32,7 @@ import { StatCard } from "@/components/common/stat-card";
 import { RelativeTime } from "@/components/common/relative-time";
 import { JobsTable } from "@/components/jobs/jobs-table";
 import { JobDetailDialog } from "@/components/jobs/job-detail-dialog";
+import { FleetStatusTable } from "@/components/targets/fleet-status-table";
 
 export function OverviewClient() {
   const { data, error, loading, refresh } = useApi<OverviewDto>("/api/overview", {
@@ -117,6 +118,33 @@ export function OverviewClient() {
           hint={`${fleet.sampledTargets} target(s) sampled`}
         />
       </section>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Fleet status</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {data.machines.length === 0 ? (
+            <div className="p-4">
+              <EmptyState
+                icon={<Server className="size-5" />}
+                title="No machines yet"
+                description="Enrol a target to see its health, metrics and warnings here."
+                action={
+                  <Link
+                    href="/targets"
+                    className="text-sm font-medium text-primary hover:underline focus-visible:ring-2 focus-visible:ring-primary"
+                  >
+                    Add target
+                  </Link>
+                }
+              />
+            </div>
+          ) : (
+            <FleetStatusTable machines={data.machines} />
+          )}
+        </CardContent>
+      </Card>
 
       <section className="grid gap-6 lg:grid-cols-2">
         <Card>
@@ -227,6 +255,7 @@ function OverviewSkeleton() {
           <Skeleton key={index} className="h-24 w-full" />
         ))}
       </div>
+      <Skeleton className="h-96 w-full" />
       <div className="grid gap-6 lg:grid-cols-2">
         <Skeleton className="h-64 w-full" />
         <Skeleton className="h-64 w-full" />

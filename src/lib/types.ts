@@ -296,6 +296,36 @@ export interface FleetAggregateDto {
   avgDiskUsedPct: number | null;
 }
 
+/**
+ * One row per non-deleted target: the fleet status list.
+ *
+ * Metrics come from the target's latest telemetry snapshot; `null` means the
+ * target never reported that metric (or never reported at all).
+ */
+export interface FleetMachineDto {
+  id: string;
+  name: string;
+  /** Same derivation as the overview status totals. */
+  status: TargetStatus;
+  lastHeartbeatAt: IsoDateTime | null;
+  lastTelemetryAt: IsoDateTime | null;
+  /** Latest snapshot's agent version, falling back to the enrolled identity's. */
+  agentVersion: string | null;
+  cpuPct: number | null;
+  /** memAvailable / memTotal * 100, 1 decimal. */
+  memAvailablePct: number | null;
+  /** swapUsed / swapTotal * 100, 1 decimal; null without swap or a snapshot. */
+  swapUsedPct: number | null;
+  /** Mount point of the filesystem with the highest used ratio. */
+  diskWorstMount: string | null;
+  /** That filesystem's used ratio * 100, 1 decimal; null when no disks. */
+  diskWorstUsedPct: number | null;
+  /** Resource-pressure warnings derived from the latest snapshot at read time. */
+  warnings: ResourceWarning[];
+  /** Number of failed metric collectors in the latest snapshot. */
+  collectionErrorCount: number;
+}
+
 export interface OverviewDto {
   totals: {
     targets: number;
@@ -309,6 +339,8 @@ export interface OverviewDto {
   countsByStatus: StatusCountDto[];
   /** Worst-freshness DEGRADED and OFFLINE targets, capped at 10. */
   degradedTargets: TargetDto[];
+  /** Every non-deleted target, one row each, ordered trouble-first. */
+  machines: FleetMachineDto[];
   activeJobs: JobDto[];
   failedJobs: JobDto[];
   recentJobs: JobDto[];

@@ -85,6 +85,36 @@ export function ResourceWarnings({ warnings }: ResourceWarningsProps) {
   );
 }
 
+export interface ResourceWarningCountProps {
+  warnings: readonly ResourceWarning[];
+}
+
+/**
+ * Compact warning pill for dense tables: the count plus the warning codes.
+ *
+ * The visible text is the count, so the state is never conveyed by colour
+ * alone; screen readers and the tooltip get the full list of warning codes.
+ * Renders nothing when there is no warning.
+ */
+export function ResourceWarningCount({ warnings }: ResourceWarningCountProps) {
+  if (warnings.length === 0) return null;
+
+  const critical = warnings.some((warning) => warning.severity === "critical");
+  const Icon = critical ? OctagonAlert : AlertTriangle;
+  const labels = warnings.map((warning) => WARNING_LABEL[warning.code]);
+
+  return (
+    <Badge variant={critical ? "error" : "degraded"} title={labels.join(", ")}>
+      <Icon className="size-3" aria-hidden="true" />
+      <span className="tabular-nums">{warnings.length}</span>
+      <span className="sr-only">
+        {warnings.length === 1 ? " warning: " : " warnings: "}
+        {labels.join(", ")}
+      </span>
+    </Badge>
+  );
+}
+
 /**
  * Compact at-a-glance rendering (count plus one badge per warning) for the
  * Summary tab, so trouble is visible without opening Monitoring.
