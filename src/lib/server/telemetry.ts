@@ -8,6 +8,7 @@ import type {
 import { prisma } from "./prisma";
 import { toTelemetryDto } from "./dto";
 import { getSettings } from "./settings";
+import { deriveResourceWarnings } from "./warnings";
 import type { HeartbeatPayload } from "./schemas";
 
 /**
@@ -171,12 +172,15 @@ export async function getTelemetrySeries(
     netTxRateBps: row.netTxRateBps,
   }));
 
+  const latestDto = latest ? toTelemetryDto(latest) : null;
+
   return {
     targetId,
     range,
     intervalSec: config.bucketSec,
     points,
-    latest: latest ? toTelemetryDto(latest) : null,
+    latest: latestDto,
+    warnings: deriveResourceWarnings(latestDto),
   };
 }
 

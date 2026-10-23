@@ -34,19 +34,35 @@ type pkgCache struct {
 // update cache). One Collector per agent process; Collect is safe for
 // sequential use.
 type Collector struct {
-	watched   []string
-	prevNet   map[string]netCounters
-	prevNetAt time.Time
+	watched      []string
+	prevNet      map[string]netCounters
+	prevNetAt    time.Time
+	prevDiskIO   map[string]diskCounters
+	prevDiskIOAt time.Time
 
 	pkgMu sync.Mutex
 	pkg   *pkgCache
 
 	// Injectables with safe production defaults (see NewCollector). measurePkg
 	// is swapped by tests to avoid invoking apt; pkgTTL lets tests drive cache
-	// expiry without waiting ten minutes.
+	// expiry without waiting ten minutes. readFile is swapped by collection
+	// tests; nil means os.ReadFile.
 	measurePkg func(context.Context) *protocol.PkgUpdateSummary
 	pkgTTL     time.Duration
+	readFile   func(string) ([]byte, error)
 	startOnce  sync.Once
+}
+
+// collectionErrors accumulates "<collector>: <error>" entries without ever
+// failing the heartbeat. Telemetry is best-effort: callers keep whatever data
+// the other collectors produced and report the failures alongside it.
+type collectionErrors []string
+
+func (e *collectionErrors) add(name string, err error) {
+	if err == nil {
+		return
+	}
+	*e = append(*e, name+": "+err.Error())
 }
 
 // NewCollector creates a Collector watching the given systemd units.

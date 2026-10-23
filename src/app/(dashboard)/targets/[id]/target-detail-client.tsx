@@ -177,7 +177,11 @@ export function TargetDetailClient({ id }: { id: string }) {
         </TabsList>
 
         <TabsContent value="summary" className="mt-4">
-          <SummaryTab target={target} latest={series?.latest ?? null} />
+          <SummaryTab
+            target={target}
+            latest={series?.latest ?? null}
+            warnings={series?.warnings ?? []}
+          />
         </TabsContent>
         <TabsContent value="monitoring" className="mt-4">
           <MonitoringTab

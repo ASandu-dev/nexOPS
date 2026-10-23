@@ -17,7 +17,9 @@ import (
 func (c *Collector) collect(ctx context.Context) protocol.HeartbeatRequest {
 	_ = ctx
 	hb := protocol.HeartbeatRequest{
+		CPUModel: "unknown",
 		Disks:    []protocol.DiskUsage{},
+		DiskIO:   []protocol.DiskIOStat{},
 		Net:      []protocol.NetInterface{},
 		Services: []protocol.ServiceState{},
 	}

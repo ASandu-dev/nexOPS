@@ -73,22 +73,27 @@ func TestEnrolResponseDecodes(t *testing.T) {
 func TestHeartbeatRequestFromArchitectureExample(t *testing.T) {
 	const example = `{
 	  "capturedAt": "2026-01-01T12:00:00Z",
+	  "cpuModel": "Intel(R) Xeon(R) CPU E5-2670 v3 @ 2.30GHz",
 	  "cpuPct": 12.5,
 	  "cores": 4,
 	  "load1": 0.4, "load5": 0.3, "load15": 0.2,
 	  "memTotalBytes": 8589934592,
 	  "memUsedBytes": 3221225472,
 	  "memAvailableBytes": 5368709120,
+	  "swapTotalBytes": 2147483648,
 	  "swapUsedBytes": 0,
+	  "osPrettyName": "Ubuntu 24.04.1 LTS",
 	  "disks": [{ "mount": "/", "fsType": "ext4", "totalBytes": 100, "usedBytes": 40, "inodesTotal": 1000, "inodesUsed": 100 }],
-	  "net": [{ "name": "eth0", "rxBytes": 1, "txBytes": 2, "rxRateBps": 0.0, "txRateBps": 0.0 }],
+	  "diskIO": [{ "device": "sda", "readBytes": 1048576, "writeBytes": 2097152, "readRateBps": 512, "writeRateBps": 1024 }],
+	  "net": [{ "name": "eth0", "rxBytes": 1, "txBytes": 2, "rxRateBps": 0.0, "txRateBps": 0.0, "ips": ["10.0.0.5"], "operstate": "up" }],
 	  "uptimeSec": 123456,
 	  "bootTime": "2025-12-01T00:00:00Z",
 	  "kernel": "6.8.0-45-generic",
 	  "hostname": "vm-01",
 	  "agentVersion": "0.1.0",
 	  "services": [{ "name": "nginx", "state": "active" }],
-	  "pkgUpdates": { "availableCount": 3, "rebootRequired": false }
+	  "pkgUpdates": { "availableCount": 3, "rebootRequired": false },
+	  "collectionErrors": ["meminfo: permission denied"]
 	}`
 	var hb HeartbeatRequest
 	if err := json.Unmarshal([]byte(example), &hb); err != nil {
@@ -112,18 +117,19 @@ func TestHeartbeatRequestFromArchitectureExample(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertKeys(t, out, []string{
-		"capturedAt", "cpuPct", "cores", "load1", "load5", "load15",
-		"memTotalBytes", "memUsedBytes", "memAvailableBytes", "swapUsedBytes",
-		"disks", "net", "uptimeSec", "bootTime", "kernel", "hostname",
-		"agentVersion", "services", "pkgUpdates",
+		"capturedAt", "cpuModel", "cpuPct", "cores", "load1", "load5", "load15",
+		"memTotalBytes", "memUsedBytes", "memAvailableBytes", "swapTotalBytes", "swapUsedBytes",
+		"osPrettyName", "disks", "diskIO", "net", "uptimeSec", "bootTime", "kernel", "hostname",
+		"agentVersion", "services", "pkgUpdates", "collectionErrors",
 	})
-	// Disk and net nesting.
+	// Disk, net and disk-IO nesting.
 	var again map[string]json.RawMessage
 	if err := json.Unmarshal(out, &again); err != nil {
 		t.Fatal(err)
 	}
 	assertKeysOf(t, again["disks"], []string{"mount", "fsType", "totalBytes", "usedBytes", "inodesTotal", "inodesUsed"})
-	assertKeysOf(t, again["net"], []string{"name", "rxBytes", "txBytes", "rxRateBps", "txRateBps"})
+	assertKeysOf(t, again["diskIO"], []string{"device", "readBytes", "writeBytes", "readRateBps", "writeRateBps"})
+	assertKeysOf(t, again["net"], []string{"name", "rxBytes", "txBytes", "rxRateBps", "txRateBps", "ips", "operstate"})
 	assertKeysOf(t, again["services"], []string{"name", "state"})
 	assertKeysOf(t, again["pkgUpdates"], []string{"availableCount", "rebootRequired"})
 }
@@ -152,6 +158,7 @@ func TestHeartbeatRequestNullsAreExplicit(t *testing.T) {
 	hb := HeartbeatRequest{
 		CapturedAt:   "2026-01-01T12:00:00Z",
 		Disks:        []DiskUsage{},
+		DiskIO:       []DiskIOStat{},
 		Net:          []NetInterface{},
 		Services:     []ServiceState{},
 		Hostname:     "vm-01",
@@ -165,7 +172,7 @@ func TestHeartbeatRequestNullsAreExplicit(t *testing.T) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"cpuPct", "cores", "load1", "load5", "load15", "swapUsedBytes", "uptimeSec", "bootTime", "kernel", "pkgUpdates"} {
+	for _, k := range []string{"cpuPct", "cores", "load1", "load5", "load15", "swapTotalBytes", "swapUsedBytes", "uptimeSec", "bootTime", "kernel", "pkgUpdates"} {
 		v, ok := m[k]
 		if !ok {
 			t.Errorf("nullable field %q missing from JSON (must be explicit null)", k)
@@ -175,11 +182,15 @@ func TestHeartbeatRequestNullsAreExplicit(t *testing.T) {
 			t.Errorf("nullable field %q = %v, want null", k, v)
 		}
 	}
-	// Empty slices must serialise as [] not null.
-	for _, k := range []string{"disks", "net", "services"} {
+	// Empty slices must serialise as [] not null. collectionErrors is the one
+	// exception: it is omitempty so an empty list disappears from the wire.
+	for _, k := range []string{"disks", "diskIO", "net", "services"} {
 		if m[k] == nil {
 			t.Errorf("slice field %q is null; must be []", k)
 		}
+	}
+	if _, ok := m["collectionErrors"]; ok {
+		t.Errorf("empty collectionErrors must be omitted, got %v", m["collectionErrors"])
 	}
 }
 

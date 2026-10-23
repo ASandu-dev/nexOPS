@@ -124,6 +124,7 @@ export function toTelemetryDto(snapshot: TelemetrySnapshot): TelemetryDto {
     id: snapshot.id,
     targetId: snapshot.targetId,
     capturedAt: iso(snapshot.capturedAt),
+    cpuModel: raw?.cpuModel ?? null,
     cpuPct: snapshot.cpuPct,
     cores: raw?.cores ?? null,
     load1: snapshot.load1,
@@ -132,7 +133,9 @@ export function toTelemetryDto(snapshot: TelemetrySnapshot): TelemetryDto {
     memTotalBytes: Number(snapshot.memTotalBytes),
     memUsedBytes: Number(snapshot.memUsedBytes),
     memAvailableBytes: Number(snapshot.memAvailableBytes),
+    swapTotalBytes: raw?.swapTotalBytes ?? null,
     swapUsedBytes: snapshot.swapUsedBytes === null ? null : Number(snapshot.swapUsedBytes),
+    osPrettyName: raw?.osPrettyName ?? null,
     diskUsedBytes: snapshot.diskUsedBytes === null ? null : Number(snapshot.diskUsedBytes),
     diskTotalBytes: snapshot.diskTotalBytes === null ? null : Number(snapshot.diskTotalBytes),
     netRxRateBps: snapshot.netRxRateBps,
@@ -143,9 +146,11 @@ export function toTelemetryDto(snapshot: TelemetrySnapshot): TelemetryDto {
     hostname: raw?.hostname ?? null,
     agentVersion: raw?.agentVersion ?? null,
     disks: raw?.disks ?? [],
+    diskIO: raw?.diskIO ?? [],
     net: raw?.net ?? [],
     services: raw?.services ?? [],
     pkgUpdates: raw?.pkgUpdates ?? null,
+    collectionErrors: raw?.collectionErrors ?? [],
   };
 }
 
