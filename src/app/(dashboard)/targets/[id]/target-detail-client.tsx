@@ -21,6 +21,7 @@ import {
 import { PageHeader } from "@/components/common/page-header";
 import { EditTargetDialog } from "@/components/targets/edit-target-dialog";
 import { DeleteTargetDialog } from "@/components/targets/delete-target-dialog";
+import { ReissueInstallCommandAction } from "@/components/targets/reissue-install-command-dialog";
 import { SummaryTab } from "./tabs/summary-tab";
 import { MonitoringTab } from "./tabs/monitoring-tab";
 import { SystemTab } from "./tabs/system-tab";
@@ -147,6 +148,7 @@ export function TargetDetailClient({ id }: { id: string }) {
             >
               Run update
             </Button>
+            <ReissueInstallCommandAction targetId={id} />
             <Button
               variant="outlined"
               size="sm"

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Ban } from "lucide-react";
+import { AlertTriangle, Ban } from "lucide-react";
 import type { JobDto } from "@/lib/types";
 import { apiFetch, toApiError, useApi } from "@/lib/use-api";
 import { formatDuration } from "@/lib/format";
@@ -130,6 +130,10 @@ export function JobDetailDialog({ jobId, open, onOpenChange, onChanged }: JobDet
             </p>
           ) : null}
 
+          {isSelfUpdateBootstrapFailure(data) ? (
+            <SelfUpdateBootstrapCallout targetId={data.targetId} />
+          ) : null}
+
           <CodeBlock label="stdout (tail)" code={data.stdoutTail ?? "(empty)"} />
           <CodeBlock label="stderr (tail)" code={data.stderrTail ?? "(empty)"} />
         </div>
@@ -183,6 +187,41 @@ export function JobDetailDialog({ jobId, open, onOpenChange, onChanged }: JobDet
         )}
       </DialogFooter>
     </Dialog>
+  );
+}
+
+/**
+ * A pre-self-update agent rejects the job type outright, so the job fails in
+ * milliseconds and the stderr tail alone does not explain how to recover.
+ */
+function isSelfUpdateBootstrapFailure(job: JobDto): boolean {
+  if (job.type !== "SELF_UPDATE" || job.status !== "FAILED") return false;
+  return job.stderrTail?.toLowerCase().includes("unknown job type") ?? false;
+}
+
+/** Mirrors the warning banner used for failed metric collectors. */
+function SelfUpdateBootstrapCallout({ targetId }: { targetId: string }) {
+  return (
+    <div
+      role="status"
+      className="flex flex-col gap-2 rounded-lg border border-warning-container bg-warning-container p-4"
+    >
+      <p className="flex items-center gap-2 text-sm font-semibold text-on-warning-container">
+        <AlertTriangle className="size-4" aria-hidden="true" />
+        Agent predates self-update support
+      </p>
+      <p className="text-sm text-on-warning-container">
+        This agent&apos;s binary predates self-update support, so this job cannot install it the
+        first time. Re-run the install command once on the machine (use &quot;Re-issue install
+        command&quot; on the target page), then self-update works unattended.
+      </p>
+      <Link
+        href={`/targets/${targetId}`}
+        className="w-fit text-sm font-semibold text-on-warning-container underline underline-offset-2 hover:text-primary focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-warning-container"
+      >
+        Open target page
+      </Link>
+    </div>
   );
 }
 

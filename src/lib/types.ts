@@ -146,6 +146,13 @@ export interface CreateTargetResponseDto {
   installerUrl?: string;
 }
 
+/** Response of `POST /api/targets/[id]/install-command`; the reissued token is only in the command. */
+export interface ReissueInstallCommandDto {
+  installCommand: string;
+  installerUrl: string;
+  expiresAt: string; // ISO
+}
+
 // ---------------------------------------------------------------------------
 // Telemetry
 // ---------------------------------------------------------------------------

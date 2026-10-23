@@ -174,10 +174,17 @@ Agents **do not auto-upgrade**. After a control-plane upgrade:
 
 > **Bootstrap caveat:** agents installed before the `SELF_UPDATE` job type
 > existed reject the job with `unknown job type "SELF_UPDATE"`. Those hosts
-> need one manual install re-run (the install command on the target page)
-> before self-update works; all later upgrades are then fleet-wide with no SSH.
+> need one manual install re-run before self-update works; all later upgrades
+> are then fleet-wide with no SSH. Get the command from **Target page →
+> Re-issue install command**.
 
-**Credential rotation:** Re-running install generates a new enrolment token → new agent identity → new bearer credential. The old credential is revoked when the target is deleted/recreated.
+**Re-issue install command:** for an existing target, use **Target page →
+Re-issue install command** (`POST /api/targets/[id]/install-command`). It
+returns a fresh one-time enrolment token embedded in the install command and
+invalidates any previous unconsumed tokens for that target. The old credential
+keeps working until the new enrolment succeeds, then stops working immediately
+(enrolment replaces the credential in place). The token is shown once — it is
+never stored in plaintext or written to the audit log.
 
 ---
 

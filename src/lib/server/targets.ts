@@ -3,6 +3,7 @@ import type {
   CreateTargetResponseDto,
   OsFamily,
   Paginated,
+  ReissueInstallCommandDto,
   TargetDetailDto,
   TargetDto,
   TargetStatus,
@@ -381,6 +382,51 @@ export async function createTarget(
     expiresAt: expiresAt.toISOString(),
     installCommand: buildInstallCommand(baseUrl, enrolmentToken, input.os),
     installerUrl: `${baseUrl}/api/agent/releases/install.sh`,
+  };
+}
+
+/**
+ * Issues a fresh single-use enrolment token for an existing target. Used to
+ * bootstrap agents that predate a job type and therefore need one manual
+ * reinstall; enrolment replaces the credential in place.
+ */
+export async function reissueInstallCommand(
+  id: string,
+  baseUrl: string,
+  actorId: string,
+): Promise<ReissueInstallCommandDto> {
+  const target = await prisma.target.findFirst({
+    where: { id, deletedAt: null },
+    select: { id: true, name: true, os: true },
+  });
+  if (!target) throw notFound("Target not found");
+
+  const enrolmentToken = randomToken();
+  const tokenHash = sha256(enrolmentToken);
+  const expiresAt = new Date(Date.now() + ENROLMENT_TOKEN_TTL_MS);
+
+  await prisma.$transaction(async (tx) => {
+    // Exactly one live token may exist: two would let two different hosts
+    // adopt the same target identity during enrolment.
+    await tx.enrolmentToken.deleteMany({ where: { targetId: id, usedAt: null } });
+    await tx.enrolmentToken.create({ data: { targetId: id, tokenHash, expiresAt } });
+  });
+
+  // Never put the token, its hash, or the command in audit metadata: a leaked
+  // audit row would be a credential leak.
+  await recordAudit({
+    actorId,
+    actorType: "USER",
+    action: "target.installCommandReissued",
+    targetType: "target",
+    targetId: id,
+    metadata: { name: target.name, os: target.os },
+  });
+
+  return {
+    installCommand: buildInstallCommand(baseUrl, enrolmentToken, target.os),
+    installerUrl: `${baseUrl}/api/agent/releases/install.sh`,
+    expiresAt: expiresAt.toISOString(),
   };
 }
 

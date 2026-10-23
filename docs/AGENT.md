@@ -227,8 +227,11 @@ its own binary (it already runs arbitrary code as that user).
 
 > **Bootstrap caveat:** agents installed before the `SELF_UPDATE` job type
 > existed reject the job with `unknown job type "SELF_UPDATE"`. Those hosts
-> need one manual install re-run (the install command on the target page)
-> before self-update works; all later upgrades are then fleet-wide with no SSH.
+> need one manual install re-run before self-update works; all later upgrades
+> are then fleet-wide with no SSH. Get the command from **Target page →
+> Re-issue install command**, which returns a fresh one-time token and
+> invalidates any previous unconsumed tokens for the target. The old
+> credential stops working at the moment the new enrolment succeeds.
 
 ### Manual upgrade (bootstrap for legacy agents)
 
@@ -245,7 +248,10 @@ curl -fsSLO "https://nexops.example.com/api/agent/releases/install.sh" \
   && rm -f install.sh install.sh.sha256
 ```
 
-Get a new `ENROL_TOKEN` by creating a new target (or re-creating the existing one) in the dashboard.
+Get a new `ENROL_TOKEN` with **Target page → Re-issue install command** — it
+returns the full command with a one-time token and invalidates any previous
+unconsumed tokens for that target. Creating a new target also works but changes
+the target identity.
 Once the fleet runs a self-updating agent, later upgrades are a dashboard job.
 
 ---
