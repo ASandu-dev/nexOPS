@@ -172,6 +172,12 @@ Agents **do not auto-upgrade**. After a control-plane upgrade:
 1. Dispatch a `SELF_UPDATE` job (target page or fleet-wide bulk dispatch) — the agent downloads, verifies and swaps its binary and restarts itself. Legacy agents (see caveat) need one manual install first.
 2. Or use a job: `POST /api/jobs` with `type: "APT_UPGRADE"` (if you package the agent in a repo).
 
+Self-update verifies the digest and probes the staged binary before the atomic swap; the previous build is kept at `/var/lib/nexops/bin/nexops-agent.prev`. To roll back a bad update:
+
+```bash
+sudo mv -f /var/lib/nexops/bin/nexops-agent.prev /var/lib/nexops/bin/nexops-agent && sudo systemctl restart nexops-agent
+```
+
 > **Bootstrap caveat:** agents installed before the `SELF_UPDATE` job type
 > existed reject the job with `unknown job type "SELF_UPDATE"`. Those hosts
 > need one manual install re-run before self-update works; all later upgrades

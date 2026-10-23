@@ -1,7 +1,7 @@
 // Package selfupdate implements the SELF_UPDATE job: it downloads the agent
 // release for the host's architecture from the control plane, verifies it
-// against the published SHA-256 sidecar and atomically replaces the running
-// binary.
+// against the published SHA-256 sidecar, probes the staged binary before
+// touching the running one and atomically replaces the running binary.
 //
 // Trust anchor: the release endpoint of the control plane the agent already
 // talks to (CONTROL_PLANE_URL) — the same origin install.sh uses. No
@@ -114,43 +114,89 @@ func FileDigest(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Install replaces the file at path with data.
+// Stage writes data to a temporary file next to path and flushes it to disk.
 //
-// The new binary is written to a temporary file in the same directory (so the
-// rename is atomic), flushed to disk and only then renamed over the target.
-// The old binary is left untouched unless the rename succeeds.
-func Install(path string, data []byte, mode os.FileMode) error {
+// It deliberately does not replace path: the caller can execute the staged
+// file to validate it before committing the swap. The returned path is in the
+// same directory as path, so Commit can rename it atomically. The caller owns
+// the temp file and must remove it if Commit is not called.
+func Stage(path string, data []byte, mode os.FileMode) (string, error) {
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".nexops-agent-*")
+	f, err := os.CreateTemp(dir, ".nexops-agent-*")
 	if err != nil {
-		return fmt.Errorf("create temporary file in %s: %w", dir, err)
+		return "", fmt.Errorf("create temporary file in %s: %w", dir, err)
 	}
-	tmpName := tmp.Name()
+	name := f.Name()
+	remove := true
 	defer func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName) // no-op once the rename succeeded
+		if !remove {
+			return
+		}
+		_ = f.Close()
+		_ = os.Remove(name)
 	}()
-	if err := tmp.Chmod(mode); err != nil {
-		return fmt.Errorf("set mode on %s: %w", tmpName, err)
+	if err := f.Chmod(mode); err != nil {
+		return "", fmt.Errorf("set mode on %s: %w", name, err)
 	}
-	if _, err := tmp.Write(data); err != nil {
-		return fmt.Errorf("write %s: %w", tmpName, err)
+	if _, err := f.Write(data); err != nil {
+		return "", fmt.Errorf("write %s: %w", name, err)
 	}
-	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("flush %s: %w", tmpName, err)
+	if err := f.Sync(); err != nil {
+		return "", fmt.Errorf("flush %s: %w", name, err)
 	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close %s: %w", tmpName, err)
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("close %s: %w", name, err)
 	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("replace %s: %w", path, err)
+	remove = false
+	return name, nil
+}
+
+// Commit atomically replaces path with the staged file at tmpPath.
+//
+// The current file is first hardlinked to <path>.prev so the previous build
+// can be restored; that backup replacement is itself atomic, so a failed
+// commit never destroys the existing rollback copy. The backup is best effort:
+// an unsupported filesystem must not prevent the atomic swap. On success the
+// directory entry is flushed so the swap survives a crash.
+func Commit(tmpPath, path string) error {
+	_, err := commit(tmpPath, path)
+	return err
+}
+
+// commit implements Commit and reports whether the .prev backup was refreshed,
+// so Run can tell the operator when the safeguard was skipped.
+func commit(tmpPath, path string) (backup bool, err error) {
+	prev := path + ".prev"
+	prevTmp := prev + ".tmp"
+	// Link the current binary under a temporary name and rename it over the
+	// existing backup. Rename replaces the destination atomically, so a failure
+	// leaves the previous rollback copy intact. A stale .prev.tmp can only be
+	// left by a crashed attempt; remove it before linking.
+	_ = os.Remove(prevTmp)
+	if linkErr := os.Link(path, prevTmp); linkErr == nil {
+		if renameErr := os.Rename(prevTmp, prev); renameErr == nil {
+			backup = true
+		} else {
+			_ = os.Remove(prevTmp)
+		}
 	}
-	// Flush the directory entry so the swap survives a crash.
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
+	if renameErr := os.Rename(tmpPath, path); renameErr != nil {
+		// .prev is either the previous build or a fresh link to the still
+		// installed binary — both are valid rollback targets, so keep it.
+		return backup, fmt.Errorf("replace %s: %w", path, renameErr)
 	}
-	return nil
+	syncDir(filepath.Dir(path))
+	return backup, nil
+}
+
+// syncDir flushes a directory entry so a rename survives a crash.
+func syncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	_ = d.Sync()
+	_ = d.Close()
 }
 
 // Options configures an Updater.
@@ -192,7 +238,8 @@ func New(opts Options) *Updater {
 // Run downloads, verifies and installs the latest release for this host.
 //
 // No failure path modifies the running binary: the download is verified
-// before anything is written, and the write itself is atomic.
+// before anything is written, the staged binary must pass its version probe
+// before the swap, and the swap itself is atomic.
 func (u *Updater) Run(ctx context.Context) Outcome {
 	name, err := AssetName(u.arch())
 	if err != nil {
@@ -232,17 +279,39 @@ func (u *Updater) Run(ctx context.Context) Outcome {
 		return Outcome{Message: fmt.Sprintf("already up to date (%s)", u.version())}
 	}
 
-	if err := Install(exe, binary, BinaryMode); err != nil {
+	tmpPath, err := Stage(exe, binary, BinaryMode)
+	if err != nil {
+		return failure(fmt.Errorf("install %s: %w — the agent needs write access to %s "+
+			"(run the agent from a directory it owns, or grant the %q group write access to it)",
+			name, err, filepath.Dir(exe), "nexops-agent"))
+	}
+	defer func() { _ = os.Remove(tmpPath) }() // no-op once the rename succeeded
+
+	// Execute the staged binary before touching the installed one. A release
+	// that cannot start would otherwise crash-loop under Restart=always with
+	// no way back.
+	newVersion, ok := probeVersion(ctx, tmpPath)
+	if !ok {
+		return failure(fmt.Errorf("refusing to install %s: the staged binary at %s failed its "+
+			"`version` probe (it could not be executed or exited non-zero); %s was left untouched",
+			name, tmpPath, exe))
+	}
+	u.logf("staged binary %s reported version %s", tmpPath, newVersion)
+
+	backup, err := commit(tmpPath, exe)
+	if err != nil {
 		return failure(fmt.Errorf("install %s: %w — the agent needs write access to %s "+
 			"(run the agent from a directory it owns, or grant the %q group write access to it)",
 			name, err, filepath.Dir(exe), "nexops-agent"))
 	}
 
-	newVersion := detectVersion(ctx, exe)
-	return Outcome{
-		Message:     fmt.Sprintf("installed %s (old %s), restarting agent", newVersion, u.version()),
-		RestartPath: exe,
+	message := fmt.Sprintf("installed %s (old %s), restarting agent; previous build saved as %s.prev",
+		newVersion, u.version(), exe)
+	if !backup {
+		message = fmt.Sprintf("installed %s (old %s), restarting agent; previous build backup to %s.prev skipped",
+			newVersion, u.version(), exe)
 	}
+	return Outcome{Message: message, RestartPath: exe}
 }
 
 // executablePath resolves the binary that is currently running. On Linux
@@ -288,21 +357,23 @@ func (u *Updater) logf(format string, args ...any) {
 	u.opts.Logger.Printf(format, args...)
 }
 
-// detectVersion asks the installed binary for its version. A failure is not
-// fatal: the update itself already succeeded.
-func detectVersion(ctx context.Context, path string) string {
+// probeVersion executes path with the `version` argument. The bool reports
+// whether the binary ran successfully (exit status zero); the string is its
+// parsed version, or unknownVersion when the output is not in the expected
+// form. Callers decide whether an unparseable version is fatal.
+func probeVersion(ctx context.Context, path string) (string, bool) {
 	cctx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(cctx, path, "version").Output()
 	if err != nil {
-		return unknownVersion
+		return unknownVersion, false
 	}
 	// "nexops-agent 0.1.0 (linux/amd64)"
 	fields := strings.Fields(string(out))
 	if len(fields) >= 2 && fields[0] == "nexops-agent" {
-		return fields[1]
+		return fields[1], true
 	}
-	return unknownVersion
+	return unknownVersion, true
 }
 
 func failure(err error) Outcome {

@@ -213,9 +213,11 @@ fleet) in the dashboard. The agent then
 1. downloads `nexops-agent-linux-<arch>` and its `.sha256` sidecar from the
    control plane it is enrolled with,
 2. verifies the binary against the sidecar digest,
-3. replaces `/var/lib/nexops/bin/nexops-agent` atomically (the old binary
-   survives any failure),
-4. reports the job result and then restarts itself (the PID is preserved, so
+3. executes the staged binary with `version` (10 s timeout) **before** the
+   running binary is touched, refusing the update if it cannot start,
+4. replaces `/var/lib/nexops/bin/nexops-agent` atomically and keeps the
+   previous build at `/var/lib/nexops/bin/nexops-agent.prev`,
+5. reports the job result and then restarts itself (the PID is preserved, so
    systemd keeps tracking the same service).
 
 The agent must be able to write to the directory of its own executable: the
@@ -224,6 +226,12 @@ unprivileged self-update can create a same-directory temp file and atomically
 rename it over the running binary. The control-plane TLS origin plus the
 SHA-256 sidecar remain the trust anchor; a compromised agent can only replace
 its own binary (it already runs arbitrary code as that user).
+
+To roll back a bad update, restore the previous build and restart the agent:
+
+```bash
+sudo mv -f /var/lib/nexops/bin/nexops-agent.prev /var/lib/nexops/bin/nexops-agent && sudo systemctl restart nexops-agent
+```
 
 > **Bootstrap caveat:** agents installed before the `SELF_UPDATE` job type
 > existed reject the job with `unknown job type "SELF_UPDATE"`. Those hosts
