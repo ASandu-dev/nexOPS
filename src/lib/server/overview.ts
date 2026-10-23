@@ -5,6 +5,7 @@ import { jobCountMaps, toAuditDto, toJobDto, toTargetDto } from "./dto";
 import { reapTimedOutJobs } from "./jobs";
 import { deriveTargetStatus, isEnrolmentExpiredUnused } from "./status";
 import { getFleetAggregates } from "./telemetry";
+import { buildFleetMachines, getLatestSnapshotsByTarget } from "./fleet";
 
 type TargetRow = Target & {
   agent: AgentIdentity | null;
@@ -30,8 +31,8 @@ const toNamedJobDto = (job: JobWithTargetName): JobDto => toJobDto(job, job.targ
 
 /**
  * Fleet overview assembled entirely from live queries: derived status counts,
- * worst-freshness targets, job activity, audit feed and latest-snapshot fleet
- * averages (ARCHITECTURE.md §5, GET /api/overview).
+ * worst-freshness targets, per-machine fleet status, job activity, audit feed
+ * and latest-snapshot fleet averages (ARCHITECTURE.md §5, GET /api/overview).
  */
 export async function buildOverview(): Promise<OverviewDto> {
   const now = new Date();
@@ -46,35 +47,37 @@ export async function buildOverview(): Promise<OverviewDto> {
   });
   const targetIds = targets.map((target) => target.id);
 
-  const [jobCounts, activeJobs, failedJobs, recentJobs, recentAudit, fleet] = await Promise.all([
-    prisma.job.groupBy({
-      by: ["targetId", "status"],
-      where: { targetId: { in: targetIds }, status: { in: ["QUEUED", "RUNNING"] } },
-      _count: { _all: true },
-    }),
-    prisma.job.findMany({
-      where: { status: { in: ["QUEUED", "DISPATCHED", "RUNNING"] } },
-      orderBy: { createdAt: "desc" },
-      take: 25,
-      include: { target: { select: { name: true } } },
-    }),
-    prisma.job.findMany({
-      where: {
-        status: { in: [...FAILED_JOB_STATUSES] },
-        finishedAt: { gte: new Date(now.getTime() - FAILED_WINDOW_MS) },
-      },
-      orderBy: { finishedAt: "desc" },
-      take: 20,
-      include: { target: { select: { name: true } } },
-    }),
-    prisma.job.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 10,
-      include: { target: { select: { name: true } } },
-    }),
-    prisma.auditEvent.findMany({ orderBy: { createdAt: "desc" }, take: 10 }),
-    getFleetAggregates(),
-  ]);
+  const [jobCounts, activeJobs, failedJobs, recentJobs, recentAudit, fleet, latestSnapshots] =
+    await Promise.all([
+      prisma.job.groupBy({
+        by: ["targetId", "status"],
+        where: { targetId: { in: targetIds }, status: { in: ["QUEUED", "RUNNING"] } },
+        _count: { _all: true },
+      }),
+      prisma.job.findMany({
+        where: { status: { in: ["QUEUED", "DISPATCHED", "RUNNING"] } },
+        orderBy: { createdAt: "desc" },
+        take: 25,
+        include: { target: { select: { name: true } } },
+      }),
+      prisma.job.findMany({
+        where: {
+          status: { in: [...FAILED_JOB_STATUSES] },
+          finishedAt: { gte: new Date(now.getTime() - FAILED_WINDOW_MS) },
+        },
+        orderBy: { finishedAt: "desc" },
+        take: 20,
+        include: { target: { select: { name: true } } },
+      }),
+      prisma.job.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        include: { target: { select: { name: true } } },
+      }),
+      prisma.auditEvent.findMany({ orderBy: { createdAt: "desc" }, take: 10 }),
+      getFleetAggregates(),
+      getLatestSnapshotsByTarget(),
+    ]);
 
   const { pending, running } = jobCountMaps(jobCounts);
   const enriched = targets.map((target: TargetRow) => {
@@ -121,6 +124,21 @@ export async function buildOverview(): Promise<OverviewDto> {
     .slice(0, 10)
     .map(toDto);
 
+  // One row per non-deleted target. Status is the same derivation as the
+  // totals above; the agent version falls back to the enrolled identity
+  // (already joined by the target query above, so no extra lookup is needed).
+  const machines = buildFleetMachines(
+    enriched.map((entry) => ({
+      id: entry.target.id,
+      name: entry.target.name,
+      status: entry.status,
+      lastHeartbeatAt: entry.target.lastHeartbeatAt,
+      lastTelemetryAt: entry.target.lastTelemetryAt,
+      agentVersion: entry.target.agent?.agentVersion ?? null,
+      snapshot: latestSnapshots.get(entry.target.id) ?? null,
+    })),
+  );
+
   return {
     totals: {
       targets: enriched.length,
@@ -133,6 +151,7 @@ export async function buildOverview(): Promise<OverviewDto> {
     },
     countsByStatus,
     degradedTargets,
+    machines,
     activeJobs: activeJobs.map(toNamedJobDto),
     failedJobs: failedJobs.map(toNamedJobDto),
     recentJobs: recentJobs.map(toNamedJobDto),

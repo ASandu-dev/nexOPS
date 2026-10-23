@@ -1,10 +1,4 @@
-import type {
-  AgentIdentity,
-  AuditEvent,
-  Job,
-  Target,
-  TelemetrySnapshot,
-} from "@prisma/client";
+import type { AgentIdentity, AuditEvent, Job, Target } from "@prisma/client";
 import type {
   AgentIdentityDto,
   AuditEventDto,
@@ -112,11 +106,38 @@ export const emptyPaginated = <T>(page: number, pageSize: number): Paginated<T> 
   toPaginated<T>([], page, pageSize, 0);
 
 /**
+ * Structural view of a stored telemetry snapshot.
+ *
+ * Both Prisma model rows and `$queryRaw` rows satisfy it, so a single mapper
+ * serves the telemetry endpoints and the fleet status list.
+ */
+export interface TelemetrySnapshotInput {
+  id: string;
+  targetId: string;
+  capturedAt: Date;
+  cpuPct: number | null;
+  load1: number | null;
+  load5: number | null;
+  load15: number | null;
+  memTotalBytes: bigint;
+  memUsedBytes: bigint;
+  memAvailableBytes: bigint;
+  swapUsedBytes: bigint | null;
+  diskUsedBytes: bigint | null;
+  diskTotalBytes: bigint | null;
+  netRxRateBps: number | null;
+  netTxRateBps: number | null;
+  uptimeSec: bigint | null;
+  /** Raw heartbeat payload; re-validated defensively by the mapper. */
+  raw: unknown;
+}
+
+/**
  * Maps a stored TelemetrySnapshot to its wire DTO. The `raw` column holds the
  * full validated heartbeat payload, so auxiliary fields (cores, disks, services…)
  * are re-validated defensively before being returned.
  */
-export function toTelemetryDto(snapshot: TelemetrySnapshot): TelemetryDto {
+export function toTelemetryDto(snapshot: TelemetrySnapshotInput): TelemetryDto {
   const parsed = heartbeatSchema.safeParse(snapshot.raw);
   const raw = parsed.success ? parsed.data : null;
 

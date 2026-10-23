@@ -379,6 +379,15 @@ Connectivity (`lastHeartbeatAt`) and telemetry freshness (`lastTelemetryAt`)
 are independent, so a connected target whose collection keeps failing is
 `DEGRADED` with a `NO_TELEMETRY` warning rather than `ONLINE`.
 
+**Fleet status list.** `GET /api/overview` returns one `FleetMachineDto` row
+per non-deleted target. `status` uses the derivation above; the metrics come
+from that target's latest telemetry snapshot and are `null` when the target
+never reported (or did not report that metric). Rows are ordered
+trouble-first — `OFFLINE`, `DEGRADED`, `ONLINE`, then everything else — and by
+name within each group. The latest snapshot per target is read in a single
+query (`DISTINCT ON` over the `(targetId, capturedAt)` index) and the resource
+warnings are derived at read time, like everywhere else.
+
 ---
 
 ## 5. Full API surface
@@ -404,7 +413,7 @@ All request/response bodies are Zod-validated against the DTOs in
 | `POST` | `/api/jobs` | Body `{ targetId, type, params? }` → `JobDto` (status `QUEUED`). Audited. |
 | `POST` | `/api/jobs/bulk` | Body `{ type, targetIds? }` → `{ created, skipped: [{ targetId, reason }] }`. Audited. |
 | `POST` | `/api/jobs/[id]/retry` | No body → `{ job: JobDto }`. Re-queues a `FAILED`/`TIMED_OUT` job. Audited. |
-| `GET` | `/api/overview` | `OverviewDto` (counts by status, degraded list, active + failed jobs, recent jobs, recent audit). |
+| `GET` | `/api/overview` | `OverviewDto` (counts by status, degraded list, per-machine fleet status, active + failed jobs, recent jobs, recent audit). |
 | `GET` | `/api/audit` | Query `page`, `action` → `Paginated<AuditEventDto>`. |
 | `GET` | `/api/settings` | `SettingsDto` (retention days, heartbeat interval, watched services). |
 | `PATCH` | `/api/settings` | Same body → `SettingsDto`. Audited. |
