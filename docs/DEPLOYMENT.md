@@ -169,8 +169,13 @@ docker compose logs -f control-plane
 
 Agents **do not auto-upgrade**. After a control-plane upgrade:
 
-1. Re-run the install command on each target (fetches new binary, verifies checksum, replaces `/usr/local/bin/nexops-agent`, restarts systemd unit).
+1. Dispatch a `SELF_UPDATE` job (target page or fleet-wide bulk dispatch) — the agent downloads, verifies and swaps its binary and restarts itself. Legacy agents (see caveat) need one manual install first.
 2. Or use a job: `POST /api/jobs` with `type: "APT_UPGRADE"` (if you package the agent in a repo).
+
+> **Bootstrap caveat:** agents installed before the `SELF_UPDATE` job type
+> existed reject the job with `unknown job type "SELF_UPDATE"`. Those hosts
+> need one manual install re-run (the install command on the target page)
+> before self-update works; all later upgrades are then fleet-wide with no SSH.
 
 **Credential rotation:** Re-running install generates a new enrolment token → new agent identity → new bearer credential. The old credential is revoked when the target is deleted/recreated.
 

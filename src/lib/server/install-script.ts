@@ -109,8 +109,24 @@ if [ -f /var/lib/nexops/credentials.json ]; then
 fi
 
 # --- 5. Install binary and credentials --------------------------------------
-install -m 0755 -o root -g root "$WORKDIR/nexops-agent-linux-$ARCH" /usr/local/bin/nexops-agent
-log "installed /usr/local/bin/nexops-agent"
+# The binary directory is owned by the service account so unprivileged
+# self-update can create a same-directory temp file and atomically rename it
+# over the running executable. A compromised agent can therefore only replace
+# its own binary (it already runs arbitrary code as this user); the trust
+# anchor remains the control-plane TLS origin plus the SHA-256 sidecar.
+install -d -m 0755 -o nexops-agent -g nexops-agent /var/lib/nexops/bin
+# Stage under a dotfile and rename into place: install(1) opens the target with
+# O_TRUNC, which fails with ETXTBSY ("Text file busy") while the service is
+# running. A same-directory rename swaps the inode atomically, and the running
+# process keeps the old binary until the unit restarts.
+install -m 0755 -o nexops-agent -g nexops-agent \\
+  "$WORKDIR/nexops-agent-linux-$ARCH" /var/lib/nexops/bin/.nexops-agent.new
+mv -f /var/lib/nexops/bin/.nexops-agent.new /var/lib/nexops/bin/nexops-agent
+log "installed /var/lib/nexops/bin/nexops-agent"
+# Legacy cleanup: older installers placed the binary in /usr/local/bin. The
+# unit no longer references that path, so remove the stale copy on upgrade.
+rm -f /usr/local/bin/nexops-agent
+log "removed legacy /usr/local/bin/nexops-agent (if present)"
 
 # 0770 (not 0755): the agent scrubs its one-time ENROL_TOKEN from agent.env
 # after first enrolment via an atomic temp-file rename, which requires write
@@ -188,7 +204,7 @@ Type=simple
 User=nexops-agent
 Group=nexops-agent
 EnvironmentFile=/etc/nexops/agent.env
-ExecStart=/usr/local/bin/nexops-agent
+ExecStart=/var/lib/nexops/bin/nexops-agent
 Restart=always
 RestartSec=5
 TimeoutStopSec=30

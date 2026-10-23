@@ -48,7 +48,7 @@ curl -fsSLO "$BASE/api/agent/releases/install.sh" \
 2. Validates `ENROL_TOKEN`, `CONTROL_PLANE_URL`, `OS`
 3. Creates system user/group `nexops-agent` (UID/GID allocated dynamically)
 4. Downloads `nexops-agent-linux-<arch>` + `.sha256` from `/api/agent/releases/`, verifies checksum
-5. Installs binary to `/usr/local/bin/nexops-agent` (mode 0755)
+5. Installs binary to `/var/lib/nexops/bin/nexops-agent` (mode 0755, owned `nexops-agent:nexops-agent`)
 6. Writes `/etc/nexops/agent.env` (mode 0600, owned `root:nexops-agent`) with:
    ```
    CONTROL_PLANE_URL=https://nexops.example.com
@@ -67,7 +67,7 @@ curl -fsSLO "$BASE/api/agent/releases/install.sh" \
    User=nexops-agent
    Group=nexops-agent
    EnvironmentFile=/etc/nexops/agent.env
-   ExecStart=/usr/local/bin/nexops-agent
+   ExecStart=/var/lib/nexops/bin/nexops-agent
    Restart=always
    RestartSec=5
    TimeoutStopSec=30
@@ -89,7 +89,7 @@ curl -fsSLO "$BASE/api/agent/releases/install.sh" \
 
 | Path | Owner | Mode | Purpose |
 |------|-------|------|---------|
-| `/usr/local/bin/nexops-agent` | root:root | 0755 | Agent binary (writable by the agent user only when self-update is enabled) |
+| `/var/lib/nexops/bin/nexops-agent` | nexops-agent:nexops-agent | 0755 | Agent binary (service-owned so unprivileged self-update can atomically replace it) |
 | `/etc/nexops/agent.env` | root:nexops-agent | 0600 | Static config (CONTROL_PLANE_URL, OS) + initial ENROL_TOKEN |
 | `/var/lib/nexops/agent.key` | nexops-agent:nexops-agent | 0600 | Ed25519 private key (generated on first start, **never leaves target**) |
 | `/var/lib/nexops/agent.env` | nexops-agent:nexops-agent | 0600 | Runtime credentials (bearer token, written after enrolment) |
@@ -177,8 +177,8 @@ systemctl disable --now nexops-agent
 rm -f /etc/systemd/system/nexops-agent.service
 systemctl daemon-reload
 
-# 3. Remove binary
-rm -f /usr/local/bin/nexops-agent
+# 3. Remove binary (also remove legacy copy if upgrading from the old layout)
+rm -f /var/lib/nexops/bin/nexops-agent /usr/local/bin/nexops-agent
 
 # 4. Remove config and data
 rm -rf /etc/nexops /var/lib/nexops
@@ -213,28 +213,24 @@ fleet) in the dashboard. The agent then
 1. downloads `nexops-agent-linux-<arch>` and its `.sha256` sidecar from the
    control plane it is enrolled with,
 2. verifies the binary against the sidecar digest,
-3. replaces `/usr/local/bin/nexops-agent` atomically (the old binary survives
-   any failure),
+3. replaces `/var/lib/nexops/bin/nexops-agent` atomically (the old binary
+   survives any failure),
 4. reports the job result and then restarts itself (the PID is preserved, so
    systemd keeps tracking the same service).
 
-The agent must be able to write to the directory of its own executable. The
-shipped unit runs unprivileged as `nexops-agent`, and `/usr/local/bin` is
-root-owned, so self-update fails out of the box with an actionable message
-(`install …: the agent needs write access to /usr/local/bin`) — the running
-binary is left untouched. Enable it on the target by giving the agent group
-write access to the binary directory:
+The agent must be able to write to the directory of its own executable: the
+installer places it in `/var/lib/nexops/bin`, owned by `nexops-agent`, so
+unprivileged self-update can create a same-directory temp file and atomically
+rename it over the running binary. The control-plane TLS origin plus the
+SHA-256 sidecar remain the trust anchor; a compromised agent can only replace
+its own binary (it already runs arbitrary code as that user).
 
-```bash
-sudo chown root:nexops-agent /usr/local/bin && sudo chmod 775 /usr/local/bin
-```
+> **Bootstrap caveat:** agents installed before the `SELF_UPDATE` job type
+> existed reject the job with `unknown job type "SELF_UPDATE"`. Those hosts
+> need one manual install re-run (the install command on the target page)
+> before self-update works; all later upgrades are then fleet-wide with no SSH.
 
-This lets the agent replace any binary in that directory, so prefer a
-dedicated directory it owns (install the agent to e.g. `/opt/nexops` owned by
-`nexops-agent` and point `ExecStart` there) if the host carries other
-software in `/usr/local/bin`.
-
-### Manual upgrade (first upgrade of an existing fleet)
+### Manual upgrade (bootstrap for legacy agents)
 
 An agent that predates `SELF_UPDATE` does not know the job type and fails the
 job with `unknown job type` — the first upgrade must be manual. After a

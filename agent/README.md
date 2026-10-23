@@ -24,7 +24,7 @@ dependencies, so no module proxy is required to build.
 
 Normally install.sh from the control plane does this. Manually:
 
-1. Copy `nexops-agent-linux-<arch>` to `/usr/local/bin/nexops-agent` (0755).
+1. Copy `nexops-agent-linux-<arch>` to `/var/lib/nexops/bin/nexops-agent` (0755, owned `nexops-agent:nexops-agent`).
 2. Create `/etc/nexops/agent.env` (0600):
 
    ```
